@@ -26,8 +26,8 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-dist/
 build/
+dist/TrackerControl-PC/
 *.manifest
 *.spec.bak
 trackercontrol-linux.spec

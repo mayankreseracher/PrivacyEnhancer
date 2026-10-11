@@ -69,6 +69,27 @@ TrackerControl PC is engineered to run seamlessly across all major operating sys
 | **Real-Time Stream** | Mobile list view | **Cyber-dark reactive desktop dashboard with sub-second WebSocket live waterfall** |
 | **Port Forwarding** | ❌ N/A | **TCP/UDP port forwarder with WireGuard, Orbot relay, and P2P torrent presets** |
 
+## 📦 Downloads & Proper Release Packages
+
+Pre-built standalone releases with bundled Python runtime, threat database, and assets are available directly in [dist/](dist) or via the table below:
+
+| OS / Distribution | Package Type | File | Description |
+|---|---|---|---|
+| **Windows 10 / 11** | Standalone Executable | [TrackerControl-PC.exe](dist/TrackerControl-PC.exe) | Single-file portable executable (17.4 MB) |
+| **Windows 10 / 11** | Release ZIP | [TrackerControl-PC-v1.0.0-Windows-x64.zip](dist/TrackerControl-PC-v1.0.0-Windows-x64.zip) | Portable bundle with batch launcher (17.2 MB) |
+| **Debian / Ubuntu / Mint** | Native `.deb` | [trackercontrol_1.0.0_amd64.deb](dist/linux/trackercontrol_1.0.0_amd64.deb) | Native Debian package with systemd & desktop integration (19.5 MB) |
+| **Universal Linux** | Standalone Binary | [trackercontrol-linux](dist/linux/trackercontrol-linux) | Native 64-bit ELF standalone executable (19.7 MB) |
+| **Universal Linux** | Portable Tarball | [trackercontrol-v1.0.0-linux-x86_64.tar.gz](dist/linux/trackercontrol-v1.0.0-linux-x86_64.tar.gz) | Complete bundle with install.sh and uninstall.sh (19.5 MB) |
+| **Arch Linux / Manjaro** | PKGBUILD | [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD) | AUR / Arch build recipe |
+| **Fedora / RHEL / openSUSE** | RPM Spec | [packaging/rpm/trackercontrol.spec](packaging/rpm/trackercontrol.spec) | RPM packaging specification |
+
+> 💡 **Direct Download Links from GitHub Repository:**  
+> • Windows Executable: [Download TrackerControl-PC.exe](https://github.com/mayankreseracher/PrivacyEnhancer/raw/main/dist/TrackerControl-PC.exe)  
+> • Windows Portable ZIP: [Download TrackerControl-PC-v1.0.0-Windows-x64.zip](https://github.com/mayankreseracher/PrivacyEnhancer/raw/main/dist/TrackerControl-PC-v1.0.0-Windows-x64.zip)  
+> • Debian / Ubuntu Package: [Download trackercontrol_1.0.0_amd64.deb](https://github.com/mayankreseracher/PrivacyEnhancer/raw/main/dist/linux/trackercontrol_1.0.0_amd64.deb)  
+> • Linux Standalone Binary: [Download trackercontrol-linux](https://github.com/mayankreseracher/PrivacyEnhancer/raw/main/dist/linux/trackercontrol-linux)  
+> • Universal Linux Tarball: [Download trackercontrol-v1.0.0-linux-x86_64.tar.gz](https://github.com/mayankreseracher/PrivacyEnhancer/raw/main/dist/linux/trackercontrol-v1.0.0-linux-x86_64.tar.gz)  
+
 ---
 
 ## 🚀 Installation & Quickstart
