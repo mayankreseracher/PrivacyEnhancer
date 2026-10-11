@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=TrackerControl PC
+GenericName=Privacy Guard & Firewall
+Comment=Sovereign Desktop Privacy Guard, Multi-Tunnel WireGuard & Orbot Tor Firewall
+Exec=trackercontrol
+Icon=trackercontrol
+Terminal=false
+Categories=Network;Security;System;
+Keywords=privacy;tracker;firewall;wireguard;tor;orbot;telemetry;vpn;
+StartupNotify=true
+StartupWMClass=trackercontrol

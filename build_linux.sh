@@ -45,7 +45,12 @@ echo -e "${CYAN}[3/3] Compiling Standalone Linux Binary via PyInstaller...${RESE
 pyinstaller --clean --noconfirm \
     --name="trackercontrol-linux" \
     --add-data="frontend:frontend" \
-    --add-data="data:data" \
+    --add-data="data/trackers.json:data" \
+    --add-data="data/companies.json:data" \
+    --add-data="data/windows_telemetry.json:data" \
+    --add-data="data/port_forwarding.json:data" \
+    --add-data="data/wireguard_tunnels.json:data" \
+    --add-data="data/app_vpn_bindings.json:data" \
     --hidden-import="uvicorn" \
     --hidden-import="uvicorn.logging" \
     --hidden-import="uvicorn.loops" \

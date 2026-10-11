@@ -17,9 +17,15 @@ BINARY_NAME = "TrackerControl-PC.exe" if IS_WIN else "trackercontrol-linux"
 # Path separator for datas: ';' on Windows, ':' on Linux
 DATA_SEP = ";" if IS_WIN else ":"
 
+# Explicitly package only static data assets (never bundle local databases or user configs)
 datas = [
     ('frontend', 'frontend'),
-    ('data', 'data'),
+    ('data/trackers.json', 'data'),
+    ('data/companies.json', 'data'),
+    ('data/windows_telemetry.json', 'data'),
+    ('data/port_forwarding.json', 'data'),
+    ('data/wireguard_tunnels.json', 'data'),
+    ('data/app_vpn_bindings.json', 'data'),
 ]
 
 hidden_imports = [

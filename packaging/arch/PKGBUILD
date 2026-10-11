@@ -1,0 +1,24 @@
+# Maintainer: TrackerControl Contributors <info@trackercontrol.org>
+pkgname=trackercontrol-bin
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Sovereign Desktop Privacy Guard, Multi-Tunnel WireGuard & Orbot Tor Firewall"
+arch=('x86_64')
+url="https://github.com/TrackerControl/trackercontrol-pc"
+license=('MIT')
+depends=('wireguard-tools' 'iptables')
+optdepends=(
+    'tor: For Orbot / Onion routing integration'
+)
+provides=('trackercontrol')
+conflicts=('trackercontrol')
+source=("trackercontrol-v${pkgver}-linux-x86_64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "${srcdir}"
+    install -Dm755 trackercontrol "${pkgdir}/usr/bin/trackercontrol"
+    install -Dm644 trackercontrol.desktop "${pkgdir}/usr/share/applications/trackercontrol.desktop"
+    install -Dm644 trackercontrol.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/trackercontrol.svg"
+    install -Dm644 trackercontrol.service "${pkgdir}/usr/lib/systemd/system/trackercontrol.service"
+}

@@ -1,10 +1,31 @@
 # 🛡️ TrackerControl PC & Linux — Sovereign Edition
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-blue.svg)](https://github.com/TrackerControl/trackercontrol-pc)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://python.org)
+[![Architecture](https://img.shields.io/badge/Architecture-x86__64-orange.svg)](#downloads--packages)
+
 > **A specialized, high-performance desktop port and evolution of [TrackerControl](https://github.com/TrackerControl) designed for Windows and all Linux Distributions.**
 
-TrackerControl on Android popularized per-app tracker visibility and blocking using local VPN loopback. However, **desktop computers are an even larger surveillance blindspot**: desktop apps (Discord, Spotify, Steam, Chrome, Slack, VS Code, Electron apps, games) and operating systems (Windows DiagTrack, Ubuntu Whoopsie, Red Hat Insights, etc.) transmit massive volumes of behavioral telemetry, analytics, and device fingerprinting that **browser adblockers (like uBlock Origin) are completely blind to**.
+TrackerControl on Android popularized per-app tracker visibility and blocking using local VPN loopback. However, **desktop computers are an even larger surveillance blindspot**: desktop applications (Discord, Spotify, Steam, Chrome, Slack, VS Code, Electron apps, games) and operating systems (Windows DiagTrack, Ubuntu Whoopsie, Red Hat Insights) transmit massive volumes of behavioral telemetry, analytics, and device fingerprinting that **browser adblockers (like uBlock Origin) are completely blind to**.
 
-**TrackerControl PC** bridges this gap by bringing deep process attribution, multi-tier threat intelligence, cross-platform firewall enforcement, multi-tunnel WireGuard, Proton VPN, and Tor/Orbot integration directly to your workstation.
+**TrackerControl PC** bridges this gap by bringing deep process attribution, multi-tier threat intelligence, cross-platform kernel firewall enforcement, multi-tunnel WireGuard, Proton VPN, and Tor/Orbot integration directly to your workstation.
+
+---
+
+## 📦 Downloads & Proper Release Packages
+
+Pre-built standalone releases with bundled Python runtime, threat database, and assets are available in [`dist/`](dist/):
+
+| OS / Distribution | Package Type | File | Description |
+|---|---|---|---|
+| **Windows 10 / 11** | Standalone Executable | [`TrackerControl-PC.exe`](dist/TrackerControl-PC.exe) | Single-file portable executable (17.4 MB) |
+| **Windows 10 / 11** | Release ZIP | [`TrackerControl-PC-v1.0.0-Windows-x64.zip`](dist/TrackerControl-PC-v1.0.0-Windows-x64.zip) | Portable bundle with batch launcher (17.2 MB) |
+| **Debian / Ubuntu / Mint** | Native `.deb` | [`trackercontrol_1.0.0_amd64.deb`](dist/linux/trackercontrol_1.0.0_amd64.deb) | Native Debian package with systemd & desktop integration (19.5 MB) |
+| **Universal Linux** | Standalone Binary | [`trackercontrol-linux`](dist/linux/trackercontrol-linux) | Native 64-bit ELF standalone executable (19.7 MB) |
+| **Universal Linux** | Portable Tarball | [`trackercontrol-v1.0.0-linux-x86_64.tar.gz`](dist/linux/trackercontrol-v1.0.0-linux-x86_64.tar.gz) | Complete bundle with `install.sh` and `uninstall.sh` (19.5 MB) |
+| **Arch Linux / Manjaro** | PKGBUILD | [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) | AUR / Arch build recipe |
+| **Fedora / RHEL / openSUSE** | RPM Spec | [`packaging/rpm/trackercontrol.spec`](packaging/rpm/trackercontrol.spec) | RPM packaging specification |
 
 ---
 
@@ -50,41 +71,42 @@ TrackerControl PC is engineered to run seamlessly across all major operating sys
 
 ---
 
-## 🚀 Quickstart & Usage
+## 🚀 Installation & Quickstart
 
-### 🐧 Running on Linux
+### 🐧 On Linux
 
-#### Option A: Quick Run
-Make the launcher executable and launch:
+#### 1. Debian / Ubuntu / Linux Mint / Pop!_OS (`.deb`)
 ```bash
-chmod +x start_trackercontrol.sh
-sudo ./start_trackercontrol.sh
+sudo dpkg -i dist/linux/trackercontrol_1.0.0_amd64.deb
+sudo trackercontrol
 ```
-*(Running with `sudo` gives TrackerControl access to kernel-level socket inspection and `iptables`/`nftables` packet filtering).*
 
-#### Option B: Install as a Persistent System Daemon
+#### 2. Universal Standalone Tarball (Any Linux Distro)
 ```bash
-chmod +x install_linux.sh
-sudo ./install_linux.sh
+tar -xzf dist/linux/trackercontrol-v1.0.0-linux-x86_64.tar.gz
+cd trackercontrol-1.0.0
+sudo ./install.sh
 ```
-This automatically installs prerequisites (`wireguard-tools`, `iptables`), copies the project to `/opt/trackercontrol-pc`, and enables the systemd service:
+
+#### 3. Standalone Binary Launch
 ```bash
-sudo systemctl status trackercontrol
-sudo systemctl restart trackercontrol
+chmod +x dist/linux/trackercontrol-linux
+sudo ./dist/linux/trackercontrol-linux
 ```
+*(Or run `sudo ./start_trackercontrol.sh`)*
 
 ---
 
-### 🪟 Running on Windows
+### 🪟 On Windows
 
-Run the one-click Windows launcher:
-```powershell
-.\start_trackercontrol.bat
-```
-Or start manually:
-```powershell
-python main.py
-```
+* **Direct Executable**: Double-click or run:
+  ```powershell
+  .\dist\TrackerControl-PC.exe
+  ```
+* **Or via Batch Launcher**:
+  ```powershell
+  .\start_trackercontrol.bat
+  ```
 
 ---
 
@@ -114,10 +136,13 @@ Navigate to **`http://localhost:8000`** in any web browser to access:
 
 ---
 
-## 📁 Project Structure
+## 📁 Repository Structure
 
 ```
 trackercontrol-pc/
+├── .github/
+│   └── workflows/
+│       └── release.yml          # GitHub Actions CI/CD for auto-building releases
 ├── backend/
 │   ├── platform_helper.py       # OS detection & Linux distro parser (/etc/os-release)
 │   ├── database.py              # SQLite persistent connection history & app profiles
@@ -136,121 +161,37 @@ trackercontrol-pc/
 │   ├── index.html               # Cyber-dark glassmorphic control center
 │   ├── styles.css               # Futuristic cyberpunk styling & responsive layouts
 │   └── app.js                   # WebSocket client, radar stream & app matrix controller
+├── packaging/
+│   ├── arch/PKGBUILD            # Arch Linux package specification
+│   ├── rpm/trackercontrol.spec  # Fedora / RHEL RPM specification
+│   ├── assets/trackercontrol.svg# Scalable application icon
+│   ├── trackercontrol.desktop   # Freedesktop application entry
+│   └── package_linux_releases.sh# Master Linux release builder
 ├── data/
 │   ├── trackers.json            # Curated tracker database (4,541 entries)
 │   ├── companies.json           # Corporate intelligence profiles
-│   └── trackercontrol.db        # SQLite live event store
-├── packaging/
-│   ├── linux/
-│   │   ├── trackercontrol.desktop  # Freedesktop XDG desktop launcher with icon
-│   │   ├── trackercontrol.svg      # Vector high-res cyberpunk shield application icon
-│   │   └── build_deb.sh            # Debian/Ubuntu .deb package generator
-│   └── package_releases.py         # Universal release bundler for Windows and Linux
-├── .github/workflows/
-│   └── release.yml                 # Automated GitHub Actions multi-platform release CI/CD
-├── TrackerControl.spec             # PyInstaller standalone binary compilation specification
-├── build_linux.sh                  # One-click Linux ELF binary compiler
-├── main.py                         # Application bootstrap & entrypoint
-├── requirements.txt                # Python cross-platform dependencies
-├── start_trackercontrol.sh         # Universal Linux developer launcher
-├── install_linux.sh                # Linux systemd auto-installer
-├── trackercontrol.service          # Linux systemd unit file
-└── start_trackercontrol.bat        # Windows one-click launcher
+│   └── windows_telemetry.json   # Known OS telemetry signatures
+├── dist/                        # Standalone pre-compiled releases
+│   ├── TrackerControl-PC.exe
+│   ├── TrackerControl-PC-v1.0.0-Windows-x64.zip
+│   ├── trackercontrol-v1.0.0-linux-x86_64.tar.gz
+│   └── linux/
+│       ├── trackercontrol-linux
+│       └── trackercontrol_1.0.0_amd64.deb
+├── main.py                      # Application bootstrap
+├── requirements.txt             # Python dependencies
+├── start_trackercontrol.sh      # Universal Linux launcher
+├── start_trackercontrol.bat     # Windows launcher (with UTF-8 fix)
+├── install_linux.sh             # Linux daemon installer
+├── trackercontrol.service       # Linux systemd service unit
+├── CONTRIBUTING.md              # Open source contribution guide
+├── SECURITY.md                  # Security and vulnerability reporting
+├── LICENSE                      # MIT License
+└── .gitignore                   # Production git exclusion rules
 ```
-
----
-
-## 📦 Distribution Packages & Installation
-
-TrackerControl PC provides official pre-compiled standalone releases that **do not require Python to be installed on the host**:
-
-### 🐧 Linux Distributions
-
-#### 1. Debian, Ubuntu, Mint, Pop!_OS, Kali (`.deb`)
-Download `trackercontrol_1.0.0_amd64.deb` from Releases and install via `dpkg` or `apt`:
-```bash
-sudo dpkg -i trackercontrol_1.0.0_amd64.deb
-# or
-sudo apt-get install ./trackercontrol_1.0.0_amd64.deb
-```
-This installs:
-- Executable in `/opt/trackercontrol-pc/trackercontrol-linux`
-- Symlink in `/usr/local/bin/trackercontrol`
-- Desktop shortcut in your application launcher with full icon and menu integration (`trackercontrol.desktop`)
-- Systemd service (`trackercontrol.service`)
-
-#### 2. Universal Linux Standalone (`.tar.gz`)
-Works on **Arch Linux, Fedora, openSUSE, Alpine, Void, RHEL, and Debian**:
-```bash
-tar -xzf trackercontrol-v1.0.0-linux-x86_64.tar.gz
-cd trackercontrol-linux-x86_64
-sudo ./install_linux.sh
-```
-
----
-
-### 🪟 Windows (10 & 11)
-
-Download `TrackerControl-PC-v1.0.0-Windows-x64.zip` from Releases:
-1. Extract the `.zip` archive to any directory (e.g. `C:\Program Files\TrackerControl-PC` or desktop folder).
-2. Right-click `TrackerControl-PC.exe` and select **Run as administrator** (necessary for kernel-level `netsh` firewall enforcement and `iphlpapi` socket tracking).
-3. The dashboard opens automatically at `http://localhost:8000`.
-
----
-
-## 🔨 Building From Source
-
-### Building Linux Releases
-Prerequisites: Python 3.10+, `pip`, `binutils`, and `dpkg-deb` (on Debian/Ubuntu).
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-pip install pyinstaller
-
-# 2. Build standalone ELF binary and .deb package
-chmod +x build_linux.sh packaging/linux/build_deb.sh
-./build_linux.sh
-./packaging/linux/build_deb.sh
-
-# 3. Create compressed release archives
-python packaging/package_releases.py
-```
-Output artifacts are saved to `dist/`.
-
-### Building Windows Releases
-Prerequisites: Windows 10/11, Python 3.10+, `pip`.
-```powershell
-pip install -r requirements.txt
-pip install pyinstaller
-pyinstaller TrackerControl.spec
-python packaging\package_releases.py
-```
-
----
-
-## 🤖 GitHub Actions Automated Releases
-
-The repository includes a complete CI/CD workflow (`.github/workflows/release.yml`). Whenever a git tag matching `v*` is pushed:
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-GitHub Actions will automatically:
-1. Compile the standalone Windows executable (`TrackerControl-PC.exe`) on `windows-latest`.
-2. Compile the standalone Linux ELF binary (`trackercontrol-linux`) on `ubuntu-latest`.
-3. Package the Debian `.deb` installer.
-4. Compress release archives (`.zip` and `.tar.gz`).
-5. Publish a GitHub Release with SHA-256 checksums and downloadable release assets.
 
 ---
 
 ## 📜 License
 
-TrackerControl PC is licensed under the [MIT License](LICENSE).
-
-```
-MIT License
-Copyright (c) 2026 TrackerControl Contributors
-```
-
-You are free to use, modify, distribute, and integrate this software in private, personal, or commercial environments according to the terms of the MIT license.
+This project is licensed under the [MIT License](LICENSE) — see the [LICENSE](LICENSE) file for details.

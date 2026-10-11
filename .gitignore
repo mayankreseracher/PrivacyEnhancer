@@ -1,49 +1,82 @@
-# Python bytecode & cache
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
 
-# Environments
-.venv/
-venv/
-ENV/
-env/
-
-# PyInstaller build artifacts
+# Distribution / packaging
+.Python
 build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
 dist/
+build/
 *.manifest
 *.spec.bak
+trackercontrol-linux.spec
 
-# Local application databases & user logs
-*.db
-*.db-journal
-*.db-wal
-*.log
-data/*.db
-data/*.db-journal
-data/proton_auth.json
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
 
-# User WireGuard configurations & keys
-data/wireguard_configs/*.conf
-!data/wireguard_configs/.gitkeep
+# Environments
+.env
+.env.local
+.env.*.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Operating system artifacts
+# IDE & OS Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
-Desktop.ini
+desktop.ini
 
-# Environment and secrets (Strict policy: never commit secrets)
-.env
-.env.*
-!.env.example
-.env.local
+# Logs & Databases
+*.log
+*.tmp
+*.db
+*.sqlite
+*.sqlite3
+data/trackercontrol.db*
 
-# IDEs & Editors
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-*.swp
-*~
+# Personal Runtime VPN & Auth Secrets
+data/proton_auth.json
+data/wireguard_configs/*.conf
+!data/wireguard_configs/.gitkeep
