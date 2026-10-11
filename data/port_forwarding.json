@@ -1,0 +1,26 @@
+{
+  "fwd-51820-51820": {
+    "id": "fwd-51820-51820",
+    "name": "WireGuard Port Forward",
+    "listen_port": 51820,
+    "target_host": "127.0.0.1",
+    "target_port": 51820,
+    "protocol": "TCP",
+    "status": "Disabled",
+    "bytes_forwarded": 0,
+    "connections_handled": 0,
+    "created_at": 1791711486.4521806
+  },
+  "fwd-9055-9050": {
+    "id": "fwd-9055-9050",
+    "name": "Orbot SOCKS5 Relay",
+    "listen_port": 9055,
+    "target_host": "127.0.0.1",
+    "target_port": 9050,
+    "protocol": "TCP",
+    "status": "Disabled",
+    "bytes_forwarded": 0,
+    "connections_handled": 0,
+    "created_at": 1791711486.453177
+  }
+}

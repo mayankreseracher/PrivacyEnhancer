@@ -1,0 +1,409 @@
+"""
+FastAPI Server and REST API for TrackerControl PC.
+Provides real-time WebSockets and endpoints for the Cyber-Dark Dashboard.
+"""
+
+import os
+import csv
+import io
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, Dict, Any, List
+
+from .engine import TrackerEngine
+from .platform_helper import PlatformHelper
+
+FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
+
+app = FastAPI(title="TrackerControl PC", version="1.0.0")
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+engine = TrackerEngine()
+
+@app.on_event("startup")
+async def startup_event():
+    await engine.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await engine.stop()
+
+# ==================== WebSockets ====================
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await engine.register_websocket(websocket)
+    try:
+        while True:
+            # Keep alive and listen for client commands
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        engine.unregister_websocket(websocket)
+    except Exception:
+        engine.unregister_websocket(websocket)
+
+# ==================== REST API ====================
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "TrackerControl PC"}
+
+@app.get("/api/stats")
+async def get_stats():
+    return engine.get_stats()
+
+@app.get("/api/connections")
+async def get_connections(
+    limit: int = Query(50, ge=1, le=500),
+    status: Optional[str] = None,
+    app: Optional[str] = None
+):
+    return engine.database.get_recent_connections(limit=limit, filter_status=status, filter_app=app)
+
+@app.get("/api/apps")
+async def get_apps():
+    return engine.database.get_all_apps()
+
+@app.get("/api/system-apps")
+async def get_system_apps(q: Optional[str] = None):
+    """Discovers all installed applications on the Windows system."""
+    return engine.app_discovery.get_all_system_apps(query=q)
+
+class SelectAppRequest(BaseModel):
+    name: str
+    process_name: str
+    exe_path: str
+    mode: str = "block_trackers"
+
+@app.post("/api/apps/select")
+async def select_system_app(payload: SelectAppRequest):
+    """Adds a discovered system application to TrackerControl's managed matrix."""
+    clean_proc = payload.process_name or os.path.basename(payload.exe_path)
+    clean_name = payload.name or os.path.splitext(clean_proc)[0]
+    
+    engine.database.add_or_update_app(
+        exe_path=payload.exe_path,
+        process_name=clean_proc,
+        display_name=clean_name,
+        control_mode=payload.mode
+    )
+
+    if payload.mode == "block_all" and payload.exe_path and os.path.exists(payload.exe_path):
+        engine.firewall.block_executable(payload.exe_path, clean_proc)
+    elif payload.mode != "block_all":
+        engine.firewall.unblock_executable(clean_proc)
+
+    return {"success": True, "app": clean_name, "mode": payload.mode}
+
+class AppModeRequest(BaseModel):
+    mode: str # 'block_all', 'block_trackers', 'allow_all', 'audit'
+
+@app.post("/api/apps/{app_name}/mode")
+async def set_app_mode(app_name: str, payload: AppModeRequest):
+    engine.database.set_app_mode(app_name, payload.mode)
+    if payload.mode == "block_all":
+        for a in engine.database.get_all_apps():
+            if a["process_name"].lower() == app_name.lower():
+                if a.get("exe_path") and os.path.exists(a["exe_path"]):
+                    engine.firewall.block_executable(a["exe_path"], app_name)
+    else:
+        engine.firewall.unblock_executable(app_name)
+    return {"success": True, "app": app_name, "mode": payload.mode}
+
+class ShieldModeRequest(BaseModel):
+    mode: str # 'MAX_PRIVACY', 'BALANCED', 'AUDIT_ONLY', 'LOCKDOWN'
+
+@app.post("/api/shield/mode")
+async def set_shield_mode(payload: ShieldModeRequest):
+    engine.set_protection_mode(payload.mode)
+    return {"success": True, "mode": payload.mode}
+
+class ShieldToggleRequest(BaseModel):
+    active: bool
+
+@app.post("/api/shield/toggle")
+async def toggle_shield(payload: ShieldToggleRequest):
+    engine.toggle_shield(payload.active)
+    return {"success": True, "active": payload.active}
+
+@app.get("/api/rules")
+async def get_rules():
+    return engine.database.get_custom_rules()
+
+class RuleCreateRequest(BaseModel):
+    target_type: str # 'domain', 'ip', 'app'
+    target_value: str
+    action: str      # 'block', 'allow'
+    notes: Optional[str] = ""
+
+@app.post("/api/rules")
+async def add_rule(payload: RuleCreateRequest):
+    engine.database.add_custom_rule(payload.target_type, payload.target_value, payload.action, payload.notes or "")
+    return {"success": True}
+
+@app.delete("/api/rules/{rule_id}")
+async def delete_rule(rule_id: int):
+    engine.database.delete_custom_rule(rule_id)
+    return {"success": True}
+
+from .platform_helper import PlatformHelper
+
+# Cross-Platform OS Info & Telemetry Debloater
+@app.get("/api/os-info")
+async def get_os_info():
+    return PlatformHelper.get_system_summary()
+
+@app.get("/api/telemetry/status")
+async def get_telemetry_status():
+    return engine.firewall.get_os_privacy_status()
+
+class TelemetryToggleRequest(BaseModel):
+    service: str # e.g. 'whoopsie', 'apport', 'popularity-contest', 'diagtrack', 'advertising_id'
+    disable: bool
+
+@app.post("/api/telemetry/toggle")
+async def toggle_telemetry(payload: TelemetryToggleRequest):
+    tgt = payload.service.lower()
+    if tgt == "diagtrack":
+        return engine.firewall.toggle_diagtrack(payload.disable)
+    elif tgt == "advertising_id":
+        return engine.firewall.toggle_advertising_id(payload.disable)
+    else:
+        return engine.firewall.toggle_linux_telemetry(payload.service, payload.disable)
+
+# Legacy Windows privacy endpoint for backward compatibility
+@app.get("/api/windows-privacy")
+async def get_windows_privacy():
+    return engine.firewall.get_windows_privacy_status()
+
+class WindowsPrivacyToggleRequest(BaseModel):
+    target: str # 'diagtrack', 'advertising_id'
+    disable: bool
+
+@app.post("/api/windows-privacy/toggle")
+async def toggle_windows_privacy(payload: WindowsPrivacyToggleRequest):
+    if payload.target == "diagtrack":
+        return engine.firewall.toggle_diagtrack(payload.disable)
+    elif payload.target == "advertising_id":
+        return engine.firewall.toggle_advertising_id(payload.disable)
+    return {"success": False, "error": "Unknown target"}
+# ==================== WireGuard & Proton VPN ====================
+
+@app.get("/api/vpn/tunnels")
+async def get_vpn_tunnels():
+    return engine.wireguard.get_all_tunnels()
+
+class CreateTunnelRequest(BaseModel):
+    name: str
+    endpoint: str
+    public_key: str
+    private_key: str
+    address: Optional[str] = "10.2.0.2/32"
+    dns: Optional[str] = "10.2.0.1"
+    country: Optional[str] = "Global"
+    flag: Optional[str] = "🌐"
+
+@app.post("/api/vpn/tunnels")
+async def create_vpn_tunnel(payload: CreateTunnelRequest):
+    tunnel = engine.wireguard.add_tunnel(
+        name=payload.name,
+        tunnel_type="custom",
+        endpoint=payload.endpoint,
+        public_key=payload.public_key,
+        private_key=payload.private_key,
+        address=payload.address or "10.2.0.2/32",
+        dns=payload.dns or "10.2.0.1",
+        country=payload.country or "Global",
+        flag=payload.flag or "🌐"
+    )
+    return {"success": True, "tunnel": tunnel}
+
+class ToggleTunnelRequest(BaseModel):
+    activate: bool
+
+@app.post("/api/vpn/tunnels/{tunnel_id}/toggle")
+async def toggle_vpn_tunnel(tunnel_id: str, payload: ToggleTunnelRequest):
+    res = engine.wireguard.toggle_tunnel(tunnel_id, payload.activate)
+    return res
+
+@app.delete("/api/vpn/tunnels/{tunnel_id}")
+async def delete_vpn_tunnel(tunnel_id: str):
+    res = engine.wireguard.delete_tunnel(tunnel_id)
+    return res
+
+@app.get("/api/vpn/proton/servers")
+async def get_proton_servers(country: Optional[str] = None, tier: Optional[str] = None, q: Optional[str] = None):
+    return engine.proton.get_servers(country=country, tier=tier, search=q)
+
+@app.get("/api/vpn/proton/auth")
+async def get_proton_auth():
+    return engine.proton.get_auth_status()
+
+class ProtonAuthRequest(BaseModel):
+    private_key: str
+    address: Optional[str] = "10.2.0.2/32"
+    tier: Optional[str] = "Free"
+    username: Optional[str] = "Proton User"
+
+@app.post("/api/vpn/proton/auth")
+async def save_proton_auth(payload: ProtonAuthRequest):
+    res = engine.proton.save_auth(
+        private_key=payload.private_key,
+        address=payload.address or "10.2.0.2/32",
+        tier=payload.tier or "Free",
+        username=payload.username or "Proton User"
+    )
+    return res
+
+class DeployProtonTunnelRequest(BaseModel):
+    server_id: str
+    custom_name: Optional[str] = None
+
+@app.post("/api/vpn/proton/deploy")
+async def deploy_proton_server(payload: DeployProtonTunnelRequest):
+    wg_conf = engine.proton.generate_wireguard_config(payload.server_id)
+    name = payload.custom_name or f"Proton {wg_conf['server_name']}"
+    
+    tunnel = engine.wireguard.add_tunnel(
+        name=name,
+        tunnel_type="proton",
+        endpoint=wg_conf["endpoint"],
+        public_key=wg_conf["public_key"],
+        private_key=engine.proton.auth_data.get("private_key", "CLIENT_PRIVATE_KEY_HERE"),
+        country=wg_conf["country"],
+        flag=wg_conf["flag"],
+        conf_content=wg_conf["conf_content"]
+    )
+    return {"success": True, "tunnel": tunnel}
+
+class BindAppRequest(BaseModel):
+    process_name: str
+    tunnel_id: Optional[str] = None
+
+@app.post("/api/vpn/bind-app")
+async def bind_app_tunnel(payload: BindAppRequest):
+    res = engine.wireguard.bind_app_to_tunnel(payload.process_name, payload.tunnel_id)
+    return res
+
+# ==================== Orbot VPN Endpoints ====================
+
+@app.get("/api/vpn/orbot/status")
+async def get_orbot_status():
+    return engine.orbot.detect_status()
+
+@app.get("/api/vpn/orbot/identity")
+async def get_orbot_identity():
+    return engine.orbot.get_network_identity()
+
+@app.post("/api/vpn/orbot/new-identity")
+async def cycle_orbot_identity():
+    return engine.orbot.request_new_identity()
+
+# ==================== Port Forwarding Endpoints ====================
+
+@app.get("/api/vpn/port-forwarding")
+async def get_port_forwarding_rules():
+    return engine.port_forwarder.get_all_rules()
+
+class CreatePortForwardRequest(BaseModel):
+    name: str
+    listen_port: int
+    target_host: str
+    target_port: int
+    protocol: Optional[str] = "TCP"
+    auto_start: Optional[bool] = True
+
+@app.post("/api/vpn/port-forwarding")
+async def create_port_forward_rule(payload: CreatePortForwardRequest):
+    rule = engine.port_forwarder.add_rule(
+        name=payload.name,
+        listen_port=payload.listen_port,
+        target_host=payload.target_host,
+        target_port=payload.target_port,
+        protocol=payload.protocol or "TCP",
+        auto_start=payload.auto_start if payload.auto_start is not None else True
+    )
+    if payload.auto_start:
+        await engine.port_forwarder.start_rule(rule["id"])
+    return {"success": True, "rule": rule}
+
+@app.post("/api/vpn/port-forwarding/{rule_id}/start")
+async def start_port_forward_rule(rule_id: str):
+    return await engine.port_forwarder.start_rule(rule_id)
+
+@app.post("/api/vpn/port-forwarding/{rule_id}/stop")
+async def stop_port_forward_rule(rule_id: str):
+    return await engine.port_forwarder.stop_rule(rule_id)
+
+@app.delete("/api/vpn/port-forwarding/{rule_id}")
+async def delete_port_forward_rule(rule_id: str):
+    return await engine.port_forwarder.delete_rule(rule_id)
+
+# ==================== Split Tunneling ====================
+
+class SplitTunnelConfigRequest(BaseModel):
+    process_name: str
+    mode: str # 'tunnel', 'orbot', 'bypass', 'block'
+    tunnel_id: Optional[str] = None
+
+@app.post("/api/vpn/split-tunneling")
+async def set_split_tunneling(payload: SplitTunnelConfigRequest):
+    if payload.mode == "tunnel":
+        engine.wireguard.bind_app_to_tunnel(payload.process_name, payload.tunnel_id)
+        engine.database.set_app_mode(payload.process_name, "block_trackers")
+    elif payload.mode == "orbot":
+        engine.wireguard.bind_app_to_tunnel(payload.process_name, "orbot")
+        engine.database.set_app_mode(payload.process_name, "block_trackers")
+    elif payload.mode == "bypass":
+        engine.wireguard.bind_app_to_tunnel(payload.process_name, "direct")
+        engine.database.set_app_mode(payload.process_name, "allow_all")
+    elif payload.mode == "block":
+        engine.wireguard.bind_app_to_tunnel(payload.process_name, None)
+        engine.database.set_app_mode(payload.process_name, "block_all")
+    return {"success": True, "app": payload.process_name, "mode": payload.mode}
+
+@app.get("/api/trackers")
+async def search_trackers(q: Optional[str] = None, limit: int = 50):
+    results = []
+    query = (q or "").lower().strip()
+    for domain, t in engine.intelligence.trackers_map.items():
+        if not query or query in domain or query in t.get("name", "").lower() or query in t.get("company", "").lower():
+            results.append(t)
+            if len(results) >= limit:
+                break
+    return results
+
+@app.get("/api/export/csv")
+async def export_csv():
+    conns = engine.database.get_recent_connections(limit=1000)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Timestamp", "Process Name", "Domain", "IP", "Port", "Category", "Company", "Risk", "Status", "Block Reason"])
+    for c in conns:
+        writer.writerow([
+            c["timestamp"], c["process_name"], c["domain"], c["ip"], c["port"],
+            c["category"], c["company"], c["risk"], c["status"], c["block_reason"]
+        ])
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=trackercontrol_export.csv"}
+    )
+
+# Static Dashboard
+@app.get("/")
+async def root():
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")

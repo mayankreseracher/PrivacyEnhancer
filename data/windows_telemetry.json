@@ -1,0 +1,32 @@
+[
+  {
+    "service": "DiagTrack",
+    "name": "Connected User Experiences and Telemetry",
+    "desc": "Collects diagnostic and usage information",
+    "status": "active"
+  },
+  {
+    "service": "dmwappushservice",
+    "name": "Device Management Wireless Application Protocol (WAP) Push",
+    "desc": "Used by Microsoft to route telemetry and push routing",
+    "status": "active"
+  },
+  {
+    "key": "AdvertisingId",
+    "name": "Windows Advertising ID",
+    "desc": "Provides a unique advertising identifier to desktop apps",
+    "status": "enabled"
+  },
+  {
+    "key": "CortanaData",
+    "name": "Cortana & Windows Search Cloud Data",
+    "desc": "Sends user search queries and keystrokes to Bing cloud",
+    "status": "enabled"
+  },
+  {
+    "key": "EdgeTelemetry",
+    "name": "Microsoft Edge Background Diagnostics",
+    "desc": "Sends tab activity and diagnostic payloads in background",
+    "status": "enabled"
+  }
+]

@@ -1,0 +1,50 @@
+{
+  "Alphabet Inc.": {
+    "headquarters": "Mountain View, CA, USA",
+    "description": "Global tech giant operating Google Search, Android, YouTube, DoubleClick, and Firebase. Monopolizes desktop & mobile ad tech and cross-app tracking.",
+    "badge_color": "#EA4335",
+    "risk_level": "Extreme"
+  },
+  "Meta Platforms Inc.": {
+    "headquarters": "Menlo Park, CA, USA",
+    "description": "Operates Facebook, Instagram, WhatsApp, and the Meta Audience Network. Uses SDK pixels, Graph API, and cross-site scripts to construct shadow profiles.",
+    "badge_color": "#1877F2",
+    "risk_level": "Extreme"
+  },
+  "Microsoft Corporation": {
+    "headquarters": "Redmond, WA, USA",
+    "description": "Creator of Windows OS, Edge, Office 365, and Azure. Embeds kernel-level telemetry (DiagTrack), advertising IDs, and diagnostic logging in consumer PCs.",
+    "badge_color": "#00A4EF",
+    "risk_level": "High"
+  },
+  "ByteDance Ltd.": {
+    "headquarters": "Beijing, China / Singapore",
+    "description": "Parent company of TikTok, CapCut, and Pangle. Known for intensive device fingerprinting, clipboard inspection, and algorithmic profiling.",
+    "badge_color": "#25F4EE",
+    "risk_level": "High"
+  },
+  "Adobe Systems Inc.": {
+    "headquarters": "San Jose, CA, USA",
+    "description": "Operates Creative Cloud suite, Acrobat, and Adobe Experience Platform (Demdex/Omniture). Collects extensive behavioral data from creative tools.",
+    "badge_color": "#FF0000",
+    "risk_level": "Medium"
+  },
+  "Spotify AB": {
+    "headquarters": "Stockholm, Sweden",
+    "description": "Music streaming platform with aggressive embedded audio ads, location tracking, and listening habit analytics.",
+    "badge_color": "#1DB954",
+    "risk_level": "Medium"
+  },
+  "Discord Inc.": {
+    "headquarters": "San Francisco, CA, USA",
+    "description": "Chat platform collecting typing telemetry, game activity, and science metrics via its desktop Electron client.",
+    "badge_color": "#5865F2",
+    "risk_level": "Medium"
+  },
+  "Twilio Inc.": {
+    "headquarters": "San Francisco, CA, USA",
+    "description": "Operates Segment CDP, aggregating user events from thousands of desktop and web applications into unified identities.",
+    "badge_color": "#F22F46",
+    "risk_level": "High"
+  }
+}

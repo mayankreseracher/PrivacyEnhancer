@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrackerControl PC — Sovereign Desktop Privacy & Telemetry Guard</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Top Navigation -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">🛡️</div>
+      <div>
+        <div class="brand-name">TrackerControl <span class="brand-badge">PC Sovereign</span></div>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <div style="display: flex; align-items: center; gap: 8px; margin-right: 12px;">
+        <span id="hostOsBadge" style="background: rgba(0, 229, 255, 0.12); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--accent-glow); font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; font-weight: 600;">🖥️ OS: Detecting...</span>
+        <span class="live-pulse" id="enginePulse"></span>
+        <span style="font-size: 0.8rem; font-weight: 700; color: #00ff9d;" id="engineStatus">ENGINE ARMED</span>
+      </div>
+
+      <select class="mode-select" id="shieldModeSelect">
+        <option value="MAX_PRIVACY">🛡️ Maximum Privacy (Strict)</option>
+        <option value="BALANCED">⚖️ Balanced Shield</option>
+        <option value="AUDIT_ONLY">🔍 Snoop Audit Only</option>
+        <option value="LOCKDOWN">🚫 Total App Lockdown</option>
+      </select>
+
+      <label class="switch-label">
+        <div class="switch">
+          <input type="checkbox" id="masterShieldToggle" checked>
+          <span class="slider"></span>
+        </div>
+        <span>Shield Active</span>
+      </label>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main>
+
+    <!-- Telemetry Metric Row -->
+    <div class="telemetry-grid">
+      <div class="glass-panel metric-card blocked">
+        <div class="metric-title">Trackers Neutralized</div>
+        <div class="metric-value" id="blockedCount">0</div>
+        <div class="metric-sub" id="blockedRate">Ads, Telemetry & Fingerprinting blocked</div>
+      </div>
+
+      <div class="metric-card glass-panel apps">
+        <div class="metric-title">Desktop Apps Monitored</div>
+        <div class="metric-value" id="monitoredAppsCount">0</div>
+        <div class="metric-sub">Active processes under continuous radar</div>
+      </div>
+
+      <div class="metric-card glass-panel threats">
+        <div class="metric-title">Total Intercepted Sockets</div>
+        <div class="metric-value" id="totalRequestsCount">0</div>
+        <div class="metric-sub">Processed network sockets & DNS queries</div>
+      </div>
+
+      <div class="metric-card glass-panel">
+        <div class="metric-title">Primary Surveillance Entity</div>
+        <div class="metric-value" style="font-size: 1.45rem; font-family: var(--font-sans);" id="topCorporation">Scanning...</div>
+        <div class="metric-sub" id="topCorporationSub">Cross-app tracking attribution</div>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" data-tab="radarTab">
+        <span>🛰️</span> Live Tracker Radar
+      </button>
+      <button class="tab-btn" data-tab="appMatrixTab">
+        <span>📱</span> App Privacy Matrix
+      </button>
+      <button class="tab-btn" data-tab="windowsOsTab">
+        <span id="osTabIcon">🛡️</span> <span id="osTabTitle">OS Privacy Debloater</span>
+      </button>
+      <button class="tab-btn" data-tab="surveillanceTab">
+        <span>🏢</span> Corporate Intel
+      </button>
+      <button class="tab-btn" data-tab="rulesTab">
+        <span>⚙️</span> Firewall & Rules
+      </button>
+      <button class="tab-btn" data-tab="vpnTab">
+        <span>🛡️</span> WireGuard & Proton VPN
+      </button>
+    </div>
+
+    <!-- TAB 1: Live Tracker Radar (Waterfall) -->
+    <section id="radarTab" class="tab-content active">
+      <div class="waterfall-header">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+          <input type="text" id="radarSearchInput" class="search-box" placeholder="Filter by App, Domain, Company...">
+          <div class="filter-btn-group">
+            <button class="filter-btn active" data-filter="all">All Traffic</button>
+            <button class="filter-btn" data-filter="blocked">Blocked Only</button>
+            <button class="filter-btn" data-filter="trackers">Trackers Only</button>
+            <button class="filter-btn" data-filter="telemetry">Windows Telemetry</button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-action" id="toggleStreamBtn">⏸️ Pause Stream</button>
+          <a href="/api/export/csv" class="btn-action" style="text-decoration: none;">📥 Export CSV</a>
+        </div>
+      </div>
+
+      <div class="glass-panel waterfall-table-wrapper">
+        <table class="waterfall-table">
+          <thead>
+            <tr>
+              <th style="width: 80px;">Time</th>
+              <th style="width: 140px;">Application</th>
+              <th>Target Destination</th>
+              <th>Corporate Entity</th>
+              <th>Category</th>
+              <th>Risk</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="waterfallBody">
+            <tr>
+              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                Listening for real-time Windows network traffic...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 2: App Privacy Matrix -->
+    <section id="appMatrixTab" class="tab-content">
+      <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <h2 style="font-size: 1.25rem; font-weight: 700;">Per-Application Firewall & Tracker Control</h2>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">
+            Neutralize tracking libraries inside specific desktop apps without breaking their core functionality.
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-action" id="openAppPickerBtn" style="background: linear-gradient(135deg, rgba(0, 255, 157, 0.25), rgba(0, 229, 255, 0.25)); border-color: var(--accent-safe); color: #fff; font-weight: 700;">
+            ➕ Add / Select Installed App
+          </button>
+          <button class="btn-action" id="refreshAppsBtn">🔄 Refresh Apps</button>
+        </div>
+      </div>
+
+      <div class="app-grid" id="appMatrixGrid">
+        <!-- App Cards Rendered by JS -->
+      </div>
+    </section>
+
+    <!-- TAB 3: OS Privacy & Telemetry Neutralizer -->
+    <section id="windowsOsTab" class="tab-content">
+      <div style="margin-bottom: 20px;">
+        <h2 style="font-size: 1.25rem; font-weight: 700;" id="osDebloaterTitle">OS Privacy & Telemetry Neutralizer</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted);" id="osDebloaterSubtitle">
+          One-click kernel and service-level privacy controls for Linux & Windows diagnostic logging.
+        </p>
+      </div>
+
+      <div class="os-privacy-list" id="osPrivacyList">
+        <!-- Rendered dynamically by app.js based on detected OS -->
+      </div>
+    </section>
+
+    <!-- TAB 4: Corporate Surveillance Matrix -->
+    <section id="surveillanceTab" class="tab-content">
+      <div style="margin-bottom: 20px;">
+        <h2 style="font-size: 1.25rem; font-weight: 700;">Surveillance Entities & Tracker Intelligence</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted);">
+          Inspect parent corporations collecting data across all desktop software on your machine.
+        </p>
+      </div>
+
+      <div id="companyProfilesContainer" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px;">
+        <!-- Filled by JS -->
+      </div>
+    </section>
+
+    <!-- TAB 5: Custom Firewall & Rules -->
+    <section id="rulesTab" class="tab-content">
+      <div style="margin-bottom: 20px;">
+        <h2 style="font-size: 1.25rem; font-weight: 700;">Custom Firewall & Domain Filter Rules</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted);">
+          Manually enforce domain wildcards, custom IP ranges, or application overrides.
+        </p>
+      </div>
+
+      <div class="glass-panel" style="padding: 20px; margin-bottom: 20px;">
+        <h3 style="font-size: 1rem; margin-bottom: 12px;">Add Custom Rule</h3>
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+          <select id="ruleTargetType" class="mode-select">
+            <option value="domain">Domain (e.g. telemetry.example.com)</option>
+            <option value="ip">IP Address (e.g. 192.0.2.1)</option>
+            <option value="app">App Executable (e.g. discord.exe)</option>
+          </select>
+
+          <input type="text" id="ruleTargetValue" class="search-box" placeholder="Target domain or IP..." style="flex-grow: 1;">
+
+          <select id="ruleAction" class="mode-select">
+            <option value="block">🚫 Block</option>
+            <option value="allow">🟢 Allow</option>
+          </select>
+
+          <button class="btn-action" id="addRuleBtn" style="padding: 8px 20px;">Save Rule</button>
+        </div>
+      </div>
+
+      <div class="glass-panel waterfall-table-wrapper">
+        <table class="waterfall-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Target Value</th>
+              <th>Action</th>
+              <th>Created</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="rulesTableBody">
+            <!-- Rules dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 6: WireGuard & Proton VPN -->
+    <section id="vpnTab" class="tab-content">
+      <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <h2 style="font-size: 1.25rem; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+            <span>🛡️</span> Multi-Tunnel WireGuard & Proton VPN Engine
+          </h2>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">
+            Run concurrent WireGuard tunnels, select from global Proton VPN servers with direct auth, and split-route specific apps.
+          </p>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-action" id="openProtonAuthBtn" style="background: rgba(181, 23, 158, 0.2); border-color: var(--accent-purple); color: #fff;">
+            🔑 Proton VPN Auth
+          </button>
+          <button class="btn-action" id="openCustomTunnelBtn">
+            ➕ Add WireGuard Tunnel
+          </button>
+        </div>
+      </div>
+
+      <!-- Proton Auth Status Banner -->
+      <div class="glass-panel" style="padding: 16px 20px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid var(--accent-purple);">
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <div style="font-size: 1.8rem;">⚛️</div>
+          <div>
+            <div style="font-weight: 700; color: #fff; font-size: 0.95rem;" id="protonStatusTitle">Proton VPN WireGuard: Ready</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted);" id="protonStatusSub">Select any server below to deploy an instantaneous WireGuard tunnel.</div>
+          </div>
+        </div>
+        <div id="protonAuthBadge">
+          <span class="badge" style="background: rgba(0, 255, 157, 0.15); color: var(--accent-safe); border: 1px solid rgba(0,255,157,0.3);">
+            Active WireGuard Profile
+          </span>
+        </div>
+      </div>
+
+      <!-- Orbot / Tor VPN Engine Banner -->
+      <div class="glass-panel" style="padding: 18px 22px; margin-bottom: 24px; border-left: 4px solid #9d4edd; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <div style="font-size: 2.2rem; filter: drop-shadow(0 0 10px rgba(157,78,221,0.5));">🧅</div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <h3 style="font-size: 1.1rem; font-weight: 700; color: #fff;">Orbot / Tor Onion Network Gateway</h3>
+              <span class="badge" id="orbotStatusBadge" style="background: rgba(157,78,221,0.2); color: #c77dff; border: 1px solid rgba(157,78,221,0.4);">
+                Detecting...
+              </span>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;" id="orbotDetailsText">
+              SOCKS5 Port: 9050 | ControlPort: 9051 | Transparent Onion & Tor Routing
+            </div>
+            <div style="font-size: 0.75rem; color: #cbd5e1; margin-top: 4px;" id="orbotIdentityText">
+              Clearnet IP: Scanning... | Exit Node: Scanning...
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-action" id="orbotNewIdentityBtn" style="background: rgba(157,78,221,0.2); border-color: #c77dff; color: #fff;">
+            🔄 New Identity (NEWNYM)
+          </button>
+          <button class="btn-action" id="checkOrbotBtn">
+            🧅 Test Tor Circuit
+          </button>
+        </div>
+      </div>
+
+      <!-- Section 1: Active WireGuard Tunnels (Multiple Concurrent) -->
+      <div style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff;">
+            Active WireGuard Tunnels (Concurrent Multi-Hop / Split-Tunneling)
+          </h3>
+          <span style="font-size: 0.8rem; color: var(--text-muted);" id="tunnelsCountLabel">0 Tunnels Configured</span>
+        </div>
+        <div class="app-grid" id="activeTunnelsGrid">
+          <!-- Tunnels populated by JS -->
+        </div>
+      </div>
+
+      <!-- Section 2: Proton Global Server Explorer -->
+      <div style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+          <div>
+            <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff;">Proton VPN Global Server Fleet</h3>
+            <p style="font-size: 0.75rem; color: var(--text-muted);">Choose a server location to deploy directly as a WireGuard tunnel.</p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="protonServerSearch" class="search-box" placeholder="Search servers (e.g. Netherlands, US, Zurich, P2P)..." style="width: 220px;">
+          </div>
+        </div>
+
+        <div class="app-picker-filters" id="protonFilters">
+          <button class="filter-pill active" data-filter="all">All Servers</button>
+          <button class="filter-pill" data-filter="free">🟢 Free Tier</button>
+          <button class="filter-pill" data-filter="plus">⭐ Plus Tier</button>
+          <button class="filter-pill" data-filter="NL">🇳🇱 Netherlands</button>
+          <button class="filter-pill" data-filter="US">🇺🇸 United States</button>
+          <button class="filter-pill" data-filter="JP">🇯🇵 Japan</button>
+          <button class="filter-pill" data-filter="CH">🇨🇭 Switzerland</button>
+          <button class="filter-pill" data-filter="DE">🇩🇪 Germany</button>
+          <button class="filter-pill" data-filter="GB">🇬🇧 United Kingdom</button>
+        </div>
+
+        <div class="app-grid" id="protonServersGrid">
+          <!-- Proton servers rendered by JS -->
+        </div>
+      </div>
+
+      <!-- Section 3: App-to-Tunnel Split-Tunneling Matrix -->
+      <div class="glass-panel" style="padding: 20px; margin-bottom: 24px;">
+        <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff; margin-bottom: 8px;">
+          Per-Application VPN Routing Matrix (Split-Tunneling)
+        </h3>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 16px;">
+          Assign specific desktop apps to specific WireGuard tunnels or Orbot (e.g. FreeTube via Netherlands, Discord via US, Browser via Tor, Games Direct).
+        </p>
+
+        <div class="waterfall-table-wrapper">
+          <table class="waterfall-table">
+            <thead>
+              <tr>
+                <th>Application</th>
+                <th>Executable Path</th>
+                <th>Routing Gateway</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="appRoutingTableBody">
+              <!-- Dynamically rendered -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section 4: Port Forwarding Engine (NAT / WireGuard / P2P) -->
+      <div class="glass-panel" style="padding: 20px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+          <div>
+            <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
+              <span>🔀</span> Port Forwarding & Relay Engine
+            </h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">
+              Forward incoming/outgoing TCP & UDP traffic, relay WireGuard (51820), Tor/Orbot (9050), and P2P ports.
+            </p>
+          </div>
+          <button class="btn-action" id="openPortForwardModalBtn" style="background: rgba(0, 229, 255, 0.15); border-color: var(--accent-cyan); color: #fff;">
+            ➕ Add Port Forward Rule
+          </button>
+        </div>
+
+        <div class="waterfall-table-wrapper">
+          <table class="waterfall-table">
+            <thead>
+              <tr>
+                <th>Rule Name</th>
+                <th>Listen Port</th>
+                <th>Target Destination</th>
+                <th>Protocol</th>
+                <th>Packets / Bytes</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="portForwardingTableBody">
+              <!-- Dynamically populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Modal: Add Port Forwarding Rule -->
+    <div class="modal-backdrop" id="portForwardModal">
+      <div class="modal-dialog" style="max-width: 580px;">
+        <div class="modal-header">
+          <h3><span>🔀</span> Add Port Forwarding Rule</h3>
+          <button class="modal-close-btn" id="closePortForwardModalBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div style="margin-bottom: 14px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;">Quick Presets:</label>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="filter-pill" type="button" onclick="applyPortPreset('WireGuard Tunnel Relay', 51820, '127.0.0.1', 51820, 'UDP')">WireGuard (51820)</button>
+              <button class="filter-pill" type="button" onclick="applyPortPreset('Orbot SOCKS5 Relay', 9055, '127.0.0.1', 9050, 'TCP')">Orbot SOCKS5 (9055&rarr;9050)</button>
+              <button class="filter-pill" type="button" onclick="applyPortPreset('P2P Torrent / Game Port', 6881, '127.0.0.1', 6881, 'TCP')">Torrent P2P (6881)</button>
+              <button class="filter-pill" type="button" onclick="applyPortPreset('Web UI Forward', 8080, '127.0.0.1', 8000, 'TCP')">Web Relay (8080&rarr;8000)</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Rule Name:</label>
+            <input type="text" id="pfRuleName" class="search-box" style="width: 100%;" placeholder="e.g. WireGuard Relay">
+          </div>
+
+          <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+            <div style="flex: 1;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Listen Port (Local):</label>
+              <input type="number" id="pfListenPort" class="search-box" style="width: 100%;" placeholder="e.g. 51820">
+            </div>
+            <div style="width: 120px;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Protocol:</label>
+              <select id="pfProtocol" class="mode-select" style="width: 100%;">
+                <option value="TCP">TCP</option>
+                <option value="UDP">UDP</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <div style="flex: 2;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Target Host / IP:</label>
+              <input type="text" id="pfTargetHost" class="search-box" style="width: 100%;" value="127.0.0.1">
+            </div>
+            <div style="flex: 1;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Target Port:</label>
+              <input type="number" id="pfTargetPort" class="search-box" style="width: 100%;" placeholder="e.g. 51820">
+            </div>
+          </div>
+
+          <button class="btn-action" id="savePortForwardBtn" style="width: 100%; padding: 10px; font-weight: 700; background: var(--accent-cyan); color: #000;">
+            🚀 Deploy Port Forwarding Rule
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Proton VPN Auth & WireGuard Credentials -->
+    <div class="modal-backdrop" id="protonAuthModal">
+      <div class="modal-dialog" style="max-width: 600px;">
+        <div class="modal-header">
+          <h3><span>⚛️</span> Proton VPN WireGuard Authentication</h3>
+          <button class="modal-close-btn" id="closeProtonAuthBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 14px;">
+            Configure your Proton WireGuard credentials. You can obtain your WireGuard configuration or keys directly from your Proton Account dashboard (<code>account.proton.me</code> &rarr; VPN &rarr; WireGuard) or paste an existing Proton <code>.conf</code> file below.
+          </p>
+
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Paste Proton WireGuard .conf file (Auto-Fills Below):</label>
+            <textarea id="protonConfPaste" class="search-box" rows="3" style="width: 100%; font-family: var(--font-mono); font-size: 0.75rem;" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.2.0.2/32"></textarea>
+          </div>
+
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">WireGuard Client PrivateKey:</label>
+            <input type="password" id="protonPrivateKeyInput" class="search-box" style="width: 100%; font-family: var(--font-mono);" placeholder="e.g. yD3v...=">
+          </div>
+
+          <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <div style="flex: 1;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Assigned IP Address:</label>
+              <input type="text" id="protonAddressInput" class="search-box" style="width: 100%;" value="10.2.0.2/32">
+            </div>
+            <div style="width: 140px;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Proton Plan:</label>
+              <select id="protonTierSelect" class="mode-select" style="width: 100%;">
+                <option value="Free">Free Plan</option>
+                <option value="Plus">Plus / Unlimited</option>
+              </select>
+            </div>
+          </div>
+
+          <button class="btn-action" id="saveProtonAuthBtn" style="width: 100%; padding: 10px; font-weight: 700; background: var(--accent-purple); color: #fff; border: none;">
+            💾 Save Proton WireGuard Credentials
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Add Custom WireGuard Tunnel -->
+    <div class="modal-backdrop" id="customTunnelModal">
+      <div class="modal-dialog" style="max-width: 600px;">
+        <div class="modal-header">
+          <h3><span>➕</span> Add Custom WireGuard Tunnel</h3>
+          <button class="modal-close-btn" id="closeCustomTunnelBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Tunnel Name:</label>
+            <input type="text" id="customTunnelName" class="search-box" style="width: 100%;" placeholder="e.g. Mullvad-SE or Home-WireGuard">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Server Endpoint (IP:Port):</label>
+            <input type="text" id="customEndpoint" class="search-box" style="width: 100%;" placeholder="e.g. 198.51.100.1:51820">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Server PublicKey:</label>
+            <input type="text" id="customPubKey" class="search-box" style="width: 100%; font-family: var(--font-mono);" placeholder="WireGuard Server Public Key">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Client PrivateKey:</label>
+            <input type="password" id="customPrivKey" class="search-box" style="width: 100%; font-family: var(--font-mono);" placeholder="Client Private Key">
+          </div>
+          <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+            <div style="flex: 1;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Assigned IP Address:</label>
+              <input type="text" id="customAddress" class="search-box" style="width: 100%;" value="10.2.0.2/32">
+            </div>
+            <div style="width: 140px;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Country / Flag:</label>
+              <input type="text" id="customCountry" class="search-box" style="width: 100%;" value="🌐 Global">
+            </div>
+          </div>
+          <button class="btn-action" id="saveCustomTunnelBtn" style="width: 100%; padding: 10px; font-weight: 700;">
+            🚀 Create & Activate Tunnel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: System Installed Applications Picker -->
+    <div class="modal-backdrop" id="appPickerModal">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3><span>📦</span> Select Applications Installed on This System</h3>
+          <button class="modal-close-btn" id="closeAppPickerBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+            Choose any desktop application, game, or tool detected on your Windows PC to enforce tracker shielding or block internet access before it connects.
+          </p>
+
+          <input type="text" id="appPickerSearch" class="app-picker-search" placeholder="Search installed apps (e.g. FreeTube, Spotify, Discord, Steam, Git, Brave)...">
+
+          <div class="app-picker-filters" id="appPickerFilters">
+            <button class="filter-pill active" data-cat="all">All Apps (<span id="totalAppsBadge">0</span>)</button>
+            <button class="filter-pill" data-cat="running">Running Now</button>
+            <button class="filter-pill" data-cat="Browser">Browsers</button>
+            <button class="filter-pill" data-cat="Communication">Communication</button>
+            <button class="filter-pill" data-cat="Media">Media & Audio</button>
+            <button class="filter-pill" data-cat="Gaming">Gaming</button>
+            <button class="filter-pill" data-cat="Development">Development</button>
+            <button class="filter-pill" data-cat="Security & VPN">Security / VPN</button>
+          </div>
+
+          <div class="app-picker-list" id="appPickerList">
+            <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+              Scanning Windows Registry & program folders...
+            </div>
+          </div>
+
+          <!-- Custom Manual Executable Input Section -->
+          <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-color);">
+            <h4 style="font-size: 0.9rem; color: #fff; margin-bottom: 8px;">Custom Portable or Unregistered Executable</h4>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              <input type="text" id="customAppExePath" class="search-box" placeholder="Full .exe path (e.g. C:\Tools\custom_app.exe)" style="flex-grow: 1;">
+              <input type="text" id="customAppName" class="search-box" placeholder="App Name (e.g. Custom Tool)" style="width: 180px;">
+              <button class="btn-action" id="addCustomExeBtn" style="padding: 8px 16px;">Add Executable</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
