@@ -75,7 +75,13 @@
 
     <!-- Navigation Tabs -->
     <div class="nav-tabs">
-      <button class="tab-btn active" data-tab="radarTab">
+      <button class="tab-btn active" data-tab="graphTab">
+        <span>📈</span> Live Network Graph
+      </button>
+      <button class="tab-btn" data-tab="alertsTab">
+        <span>🚨</span> Security Alerts <span id="alertsNavBadge" class="nav-badge" style="display: none;">0</span>
+      </button>
+      <button class="tab-btn" data-tab="radarTab">
         <span>🛰️</span> Live Tracker Radar
       </button>
       <button class="tab-btn" data-tab="appMatrixTab">
@@ -95,8 +101,125 @@
       </button>
     </div>
 
+    <!-- TAB 0: Live Network Activity Wave Graph (GlassWire Style) -->
+    <section id="graphTab" class="tab-content active">
+      <!-- Digital Speedometer Grid -->
+      <div class="glasswire-speedometer-grid">
+        <div class="glass-panel speed-box rx-box">
+          <div class="speed-header">
+            <span class="speed-indicator rx-indicator">⬇️ DOWNLOAD (RX)</span>
+            <span class="speed-rate-tag" id="graphRxSpeedTag">REAL-TIME</span>
+          </div>
+          <div class="speed-display">
+            <span class="speed-num rx-color" id="graphRxSpeed">0.00</span>
+            <span class="speed-unit">KB/s</span>
+          </div>
+          <div class="speed-sub">
+            Session Rx: <span id="graphTotalRx" style="color: #fff; font-weight: 600;">0.00 MB</span>
+          </div>
+        </div>
+
+        <div class="glass-panel speed-box tx-box">
+          <div class="speed-header">
+            <span class="speed-indicator tx-indicator">⬆️ UPLOAD (TX)</span>
+            <span class="speed-rate-tag" id="graphTxSpeedTag">REAL-TIME</span>
+          </div>
+          <div class="speed-display">
+            <span class="speed-num tx-color" id="graphTxSpeed">0.00</span>
+            <span class="speed-unit">KB/s</span>
+          </div>
+          <div class="speed-sub">
+            Session Tx: <span id="graphTotalTx" style="color: #fff; font-weight: 600;">0.00 MB</span>
+          </div>
+        </div>
+
+        <div class="glass-panel speed-box block-box">
+          <div class="speed-header">
+            <span class="speed-indicator block-indicator">🛡️ THREAT INTERCEPTIONS</span>
+            <span class="speed-rate-tag">SESSION</span>
+          </div>
+          <div class="speed-display">
+            <span class="speed-num block-color" id="graphDroppedCount">0</span>
+            <span class="speed-unit">DROPPED</span>
+          </div>
+          <div class="speed-sub">
+            Telemetry & ads sinkholed in timeline
+          </div>
+        </div>
+
+        <div class="glass-panel speed-box app-active-box">
+          <div class="speed-header">
+            <span class="speed-indicator">⚡ ACTIVE TRANSMITTERS</span>
+            <span class="speed-rate-tag">CURRENT</span>
+          </div>
+          <div class="speed-display">
+            <span class="speed-num" id="graphActiveSocketsCount" style="color: #00ff9d;">0</span>
+            <span class="speed-unit">SOCKETS</span>
+          </div>
+          <div class="speed-sub">
+            Live TCP/UDP endpoints passing packet filter
+          </div>
+        </div>
+      </div>
+
+      <!-- Graph Toolbar & Canvas -->
+      <div class="glass-panel graph-canvas-card">
+        <div class="graph-toolbar">
+          <div class="graph-legend">
+            <span class="legend-item"><span class="legend-dot rx-dot"></span> Download Traffic (Cyan Wave)</span>
+            <span class="legend-item"><span class="legend-dot tx-dot"></span> Upload Traffic (Magenta Wave)</span>
+            <span class="legend-item"><span class="legend-dot blk-dot"></span> Tracker Dropped (Amber Marker)</span>
+          </div>
+
+          <div class="graph-controls">
+            <div class="time-range-group" id="graphTimeRangeGroup">
+              <button class="time-btn active" data-seconds="60">60s</button>
+              <button class="time-btn" data-seconds="180">3m</button>
+              <button class="time-btn" data-seconds="300">5m</button>
+              <button class="time-btn" data-seconds="600">10m</button>
+            </div>
+            <button class="btn-action" id="toggleGraphPauseBtn">⏸️ Pause</button>
+          </div>
+        </div>
+
+        <div class="canvas-wrapper" id="canvasContainer">
+          <canvas id="networkGraphCanvas"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: Security Alerts (GlassWire Style) -->
+    <section id="alertsTab" class="tab-content">
+      <div class="alerts-header-bar">
+        <div>
+          <h2 style="font-size: 1.25rem; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+            <span>🚨</span> Network Security Alerts & App First-Connections
+          </h2>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">
+            Real-time feed notifying you whenever a new desktop program accesses the network or a high-risk tracker is blocked.
+          </p>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-action btn-danger" id="clearAlertsBtn">🗑️ Clear All Alerts</button>
+        </div>
+      </div>
+
+      <div class="alerts-filter-bar">
+        <button class="alert-filter-btn active" data-alert-filter="all">All Alerts (<span id="alertCountAll">0</span>)</button>
+        <button class="alert-filter-btn" data-alert-filter="NEW_APP">New Applications (<span id="alertCountNewApp">0</span>)</button>
+        <button class="alert-filter-btn" data-alert-filter="TRACKER_BLOCKED">Trackers Neutralized (<span id="alertCountBlocked">0</span>)</button>
+        <button class="alert-filter-btn" data-alert-filter="warning">High Risk Only</button>
+      </div>
+
+      <div class="alerts-feed-grid" id="alertsFeedContainer">
+        <div class="glass-panel" style="padding: 40px; text-align: center; color: var(--text-muted);">
+          No security alerts yet. As background applications transmit sockets, first-connection alerts and neutralized trackers will appear here in real time.
+        </div>
+      </div>
+    </section>
+
     <!-- TAB 1: Live Tracker Radar (Waterfall) -->
-    <section id="radarTab" class="tab-content active">
+    <section id="radarTab" class="tab-content">
       <div class="waterfall-header">
         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
           <input type="text" id="radarSearchInput" class="search-box" placeholder="Filter by App, Domain, Company...">

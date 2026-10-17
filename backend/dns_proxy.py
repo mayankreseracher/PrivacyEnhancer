@@ -18,6 +18,7 @@ from dnslib import DNSRecord, DNSHeader, RR, A, AAAA, QTYPE, RCODE
 
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
+IS_MACOS = sys.platform == "darwin"
 
 class DNSProxy:
     def __init__(
@@ -227,6 +228,9 @@ class DNSProxy:
                 self._configure_windows_dns()
             elif IS_LINUX:
                 self._configure_linux_dns()
+            elif IS_MACOS:
+                self.original_dns_settings["macos"] = {}
+                self._configure_macos_dns()
             else:
                 print(f"[DNS] System DNS automatic reconfiguration not implemented for {sys.platform}.")
 
@@ -252,6 +256,8 @@ class DNSProxy:
                 self._restore_windows_dns()
             elif IS_LINUX:
                 self._restore_linux_dns()
+            elif IS_MACOS:
+                self._restore_macos_dns()
 
             self.dns_configured = False
             self.original_dns_settings.clear()
@@ -544,6 +550,105 @@ class DNSProxy:
                 os.unlink(backup_path)
             except Exception:
                 pass
+
+    def _get_active_macos_services(self) -> List[str]:
+        """Finds all active network services on macOS via networksetup."""
+        services = []
+        try:
+            res = subprocess.run(
+                ["networksetup", "-listallnetworkservices"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    line_s = line.strip()
+                    if not line_s or line_s.startswith("*") or "asterisk" in line_s.lower():
+                        continue
+                    services.append(line_s)
+        except Exception as e:
+            print(f"[DNS] Could not list macOS network services: {e}")
+        return services
+
+    def _configure_macos_dns(self):
+        """Points active macOS network services DNS to 127.0.0.1 via networksetup."""
+        services = self._get_active_macos_services()
+        if not services:
+            print("[DNS] Notice: No active macOS network services detected via networksetup.")
+            return
+
+        for s in services:
+            try:
+                res = subprocess.run(
+                    ["networksetup", "-getdnsservers", s],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                orig = {"is_dhcp": True, "servers": []}
+                out = res.stdout.strip()
+                if "aren't any DNS Servers set" not in out and out:
+                    srv_list = [l.strip() for l in out.splitlines() if l.strip() and any(c.isdigit() for c in l)]
+                    if srv_list:
+                        orig = {"is_dhcp": False, "servers": srv_list}
+                self.original_dns_settings.setdefault("macos", {})[s] = orig
+
+                set_res = subprocess.run(
+                    ["networksetup", "-setdnsservers", s, self.listen_host],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if set_res.returncode == 0:
+                    print(f"[DNS] Configured macOS DNS on '{s}' -> {self.listen_host}")
+            except Exception as e:
+                print(f"[DNS] Error configuring macOS DNS on '{s}': {e}")
+
+        # Flush macOS DNS cache
+        try:
+            subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+
+    def _restore_macos_dns(self):
+        """Restores original macOS network services DNS configuration."""
+        macos_backup = self.original_dns_settings.get("macos", {})
+        for s, orig in macos_backup.items():
+            try:
+                if orig.get("is_dhcp"):
+                    subprocess.run(
+                        ["networksetup", "-setdnsservers", s, "Empty"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    print(f"[DNS] Restored macOS DNS on '{s}' -> DHCP (automatic)")
+                else:
+                    srvs = orig.get("servers", [])
+                    if srvs:
+                        subprocess.run(
+                            ["networksetup", "-setdnsservers", s] + srvs,
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                        print(f"[DNS] Restored macOS static DNS on '{s}' -> {srvs}")
+                    else:
+                        subprocess.run(
+                            ["networksetup", "-setdnsservers", s, "Empty"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+            except Exception as e:
+                print(f"[DNS] Error restoring macOS DNS on '{s}': {e}")
+
+        # Flush macOS DNS cache
+        try:
+            subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True, timeout=3)
+        except Exception:
+            pass
 
 class DNSProtocol(asyncio.DatagramProtocol):
     def __init__(self, proxy: DNSProxy):

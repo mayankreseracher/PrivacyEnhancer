@@ -766,3 +766,416 @@ main {
   align-items: center;
   flex-shrink: 0;
 }
+
+/* ==================== GlassWire Speedometer & Live Wave Graph ==================== */
+.glasswire-speedometer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.speed-box {
+  padding: 16px 20px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.speed-box::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+}
+
+.rx-box::before {
+  background: linear-gradient(90deg, #00e5ff, rgba(0, 229, 255, 0.2));
+}
+
+.tx-box::before {
+  background: linear-gradient(90deg, #ff007f, rgba(255, 0, 127, 0.2));
+}
+
+.block-box::before {
+  background: linear-gradient(90deg, #ff9100, rgba(255, 145, 0, 0.2));
+}
+
+.app-active-box::before {
+  background: linear-gradient(90deg, #00ff9d, rgba(0, 255, 157, 0.2));
+}
+
+.speed-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.speed-indicator {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.rx-indicator { color: #00e5ff; }
+.tx-indicator { color: #ff007f; }
+.block-indicator { color: #ff9100; }
+
+.speed-rate-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+}
+
+.speed-display {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.speed-num {
+  font-size: 2.1rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+
+.rx-color {
+  color: #00e5ff;
+  text-shadow: 0 0 16px rgba(0, 229, 255, 0.4);
+}
+
+.tx-color {
+  color: #ff007f;
+  text-shadow: 0 0 16px rgba(255, 0, 127, 0.4);
+}
+
+.block-color {
+  color: #ff9100;
+  text-shadow: 0 0 16px rgba(255, 145, 0, 0.4);
+}
+
+.speed-unit {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.speed-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.graph-canvas-card {
+  padding: 18px 22px;
+  border-radius: 14px;
+  margin-bottom: 24px;
+}
+
+.graph-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.graph-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.rx-dot {
+  background: #00e5ff;
+  box-shadow: 0 0 8px #00e5ff;
+}
+
+.tx-dot {
+  background: #ff007f;
+  box-shadow: 0 0 8px #ff007f;
+}
+
+.blk-dot {
+  background: #ff9100;
+  box-shadow: 0 0 8px #ff9100;
+}
+
+.graph-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.time-range-group {
+  display: flex;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.time-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.time-btn.active, .time-btn:hover {
+  background: var(--accent-cyan);
+  color: #000;
+}
+
+.canvas-wrapper {
+  width: 100%;
+  height: 380px;
+  position: relative;
+  background: radial-gradient(circle at center, rgba(16, 26, 46, 0.4) 0%, rgba(8, 12, 22, 0.85) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+#networkGraphCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ==================== Security Alerts Feed (GlassWire Style) ==================== */
+.nav-badge {
+  background: #ff0055;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+  vertical-align: middle;
+  box-shadow: 0 0 8px rgba(255, 0, 85, 0.6);
+  animation: pulseBadge 2s infinite;
+}
+
+@keyframes pulseBadge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.alerts-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.alerts-filter-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.alert-filter-btn {
+  background: rgba(18, 24, 38, 0.6);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.alert-filter-btn.active, .alert-filter-btn:hover {
+  background: rgba(0, 229, 255, 0.15);
+  border-color: rgba(0, 229, 255, 0.4);
+  color: #fff;
+}
+
+.alerts-feed-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.alert-card {
+  padding: 16px 20px;
+  border-radius: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: relative;
+  border-left: 4px solid var(--border-color);
+  background: rgba(16, 22, 36, 0.7);
+  transition: all 0.2s;
+}
+
+.alert-card:hover {
+  background: rgba(22, 30, 48, 0.85);
+  transform: translateY(-1px);
+}
+
+.alert-card.severity-info {
+  border-left-color: #00e5ff;
+}
+
+.alert-card.severity-warning {
+  border-left-color: #ff9100;
+}
+
+.alert-card.severity-critical {
+  border-left-color: #ff0055;
+}
+
+.alert-left-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.alert-icon-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.alert-details h4 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.alert-details p {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.alert-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.alert-chip {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: #a0aec0;
+}
+
+.alert-time {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.alert-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ==================== GlassWire Per-App 3-Way Firewall Control ==================== */
+.app-firewall-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  margin-top: 10px;
+}
+
+.app-fw-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 6px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.app-fw-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.app-fw-btn.active-allow {
+  background: rgba(0, 255, 157, 0.18);
+  color: #00ff9d;
+  border: 1px solid rgba(0, 255, 157, 0.4);
+}
+
+.app-fw-btn.active-trackers {
+  background: rgba(0, 229, 255, 0.18);
+  color: #00e5ff;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+}
+
+.app-fw-btn.active-block {
+  background: rgba(255, 0, 85, 0.22);
+  color: #ff0055;
+  border: 1px solid rgba(255, 0, 85, 0.5);
+}
+

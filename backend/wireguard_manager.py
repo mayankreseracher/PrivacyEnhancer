@@ -13,7 +13,7 @@ import subprocess
 import psutil
 from typing import Dict, Any, List, Optional
 
-from .platform_helper import IS_WINDOWS, IS_LINUX, PlatformHelper
+from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS, PlatformHelper
 
 DATA_DIR = PlatformHelper.get_data_dir()
 CONFIGS_DIR = os.path.join(DATA_DIR, "wireguard_configs")
@@ -63,7 +63,7 @@ class WireGuardManager:
         for iface_name, addrs in ifaces.items():
             name_lower = iface_name.lower()
             is_vpn = any(k in name_lower for k in [
-                "proton", "wireguard", "wg0", "wg1", "wg2", "wg-", "tun0", "tun1", "tc-"
+                "proton", "wireguard", "wg0", "wg1", "wg2", "wg-", "tun0", "tun1", "tc-", "utun"
             ])
             if is_vpn:
                 tunnel_id = f"sys-{name_lower.replace(' ', '-')}"
@@ -240,6 +240,12 @@ PersistentKeepalive = 25
                             subprocess.run(["ip", "link", "set", "up", "dev", iface], capture_output=True)
                         except Exception:
                             pass
+                elif IS_MACOS:
+                    if shutil.which("wg-quick") and conf_path:
+                        try:
+                            subprocess.run(["wg-quick", "up", conf_path], capture_output=True)
+                        except Exception:
+                            pass
         else:
             tunnel["status"] = "Disconnected"
             if IS_WINDOWS:
@@ -261,6 +267,12 @@ PersistentKeepalive = 25
                     subprocess.run(["ip", "link", "delete", "dev", iface], capture_output=True)
                 except Exception:
                     pass
+            elif IS_MACOS:
+                if shutil.which("wg-quick") and conf_path:
+                    try:
+                        subprocess.run(["wg-quick", "down", conf_path], capture_output=True)
+                    except Exception:
+                        pass
 
         self.save_state()
         return {"success": True, "tunnel_id": tunnel_id, "status": tunnel["status"]}

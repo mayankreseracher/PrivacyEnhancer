@@ -12,9 +12,17 @@ block_cipher = None
 
 # Host OS identification
 IS_WIN = sys.platform == "win32"
-BINARY_NAME = "TrackerControl-PC.exe" if IS_WIN else "trackercontrol-linux"
+IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
-# Path separator for datas: ';' on Windows, ':' on Linux
+if IS_WIN:
+    BINARY_NAME = "TrackerControl-PC.exe"
+elif IS_MAC:
+    BINARY_NAME = "TrackerControl-mac"
+else:
+    BINARY_NAME = "trackercontrol-linux"
+
+# Path separator for datas: ';' on Windows, ':' on Unix
 DATA_SEP = ";" if IS_WIN else ":"
 
 # Explicitly package only static data assets (never bundle local databases or user configs)
@@ -63,6 +71,8 @@ hidden_imports = [
 
 if IS_WIN:
     hidden_imports.extend(['winreg', 'clr', 'webview.platforms.winforms'])
+elif IS_MAC:
+    hidden_imports.extend(['plistlib', 'webview.platforms.cocoa'])
 
 a = Analysis(
     ['main.py'],
@@ -134,3 +144,19 @@ exe_single = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+if IS_MAC:
+    app = BUNDLE(
+        exe_single,
+        name='TrackerControl.app',
+        icon=None,
+        bundle_identifier='org.trackercontrol.pc',
+        info_plist={
+            'CFBundleName': 'TrackerControl',
+            'CFBundleDisplayName': 'TrackerControl PC',
+            'CFBundleVersion': '1.0.0',
+            'CFBundleShortVersionString': '1.0.0',
+            'NSHighResolutionCapable': True,
+        }
+    )
+

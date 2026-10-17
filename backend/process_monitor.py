@@ -11,7 +11,7 @@ import socket
 import time
 from typing import Dict, Any, Set, Tuple, Optional, Callable
 
-from .platform_helper import IS_WINDOWS, IS_LINUX
+from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS
 
 class ProcessMonitor:
     def __init__(
@@ -110,8 +110,11 @@ class ProcessMonitor:
                 lambda: psutil.net_connections(kind="inet")
             )
         except psutil.AccessDenied:
-            if not self._warned_permissions and IS_LINUX:
-                print("[ProcessMonitor] Tip: Run with sudo on Linux for complete kernel socket visibility.")
+            if not self._warned_permissions:
+                if IS_LINUX:
+                    print("[ProcessMonitor] Tip: Run with sudo on Linux for complete kernel socket visibility.")
+                elif IS_MACOS:
+                    print("[ProcessMonitor] Tip: Run with sudo on macOS for complete socket inspection.")
                 self._warned_permissions = True
             connections = []
         except Exception as e:

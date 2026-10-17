@@ -63,6 +63,19 @@ async def health_check():
 async def get_stats():
     return engine.get_stats()
 
+@app.get("/api/bandwidth")
+async def get_bandwidth():
+    return engine.get_bandwidth_history()
+
+@app.get("/api/alerts")
+async def get_alerts():
+    return engine.get_alerts()
+
+@app.post("/api/alerts/clear")
+async def clear_alerts():
+    engine.clear_alerts()
+    return {"success": True}
+
 @app.get("/api/connections")
 async def get_connections(
     limit: int = Query(50, ge=1, le=500),
@@ -179,6 +192,8 @@ async def toggle_telemetry(payload: TelemetryToggleRequest):
         return engine.firewall.toggle_diagtrack(payload.disable)
     elif tgt == "advertising_id":
         return engine.firewall.toggle_advertising_id(payload.disable)
+    elif PlatformHelper.get_os_type() == "macOS":
+        return engine.firewall.toggle_macos_telemetry(payload.service, payload.disable)
     else:
         return engine.firewall.toggle_linux_telemetry(payload.service, payload.disable)
 

@@ -40,8 +40,11 @@ class PlatformHelper:
     def get_data_dir() -> str:
         """Returns the persistent writable data directory."""
         if getattr(sys, "frozen", False):
-            base = os.path.dirname(sys.executable)
-            data_dir = os.path.join(base, "data")
+            if IS_MACOS:
+                data_dir = os.path.expanduser("~/Library/Application Support/TrackerControl")
+            else:
+                base = os.path.dirname(sys.executable)
+                data_dir = os.path.join(base, "data")
         else:
             data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
         os.makedirs(data_dir, exist_ok=True)
@@ -173,6 +176,16 @@ class PlatformHelper:
             summary["has_wg_quick"] = bool(shutil.which("wg-quick"))
             summary["has_iptables"] = bool(shutil.which("iptables"))
             summary["has_nft"] = bool(shutil.which("nft"))
+        elif IS_MACOS:
+            mac_ver, _, _ = platform.mac_ver()
+            ver_str = mac_ver if mac_ver else platform.release()
+            summary["platform_name"] = f"macOS {ver_str} ({arch})"
+            summary["firewall_backend"] = "BSD Packet Filter (pfctl) & ALFI"
+            summary["wireguard_driver"] = "wireguard-go / utun"
+            summary["has_pfctl"] = bool(shutil.which("pfctl"))
+            summary["has_networksetup"] = bool(shutil.which("networksetup"))
+            summary["has_wg_quick"] = bool(shutil.which("wg-quick"))
+            summary["has_socketfilterfw"] = os.path.exists("/usr/libexec/ApplicationFirewall/socketfilterfw")
         else:
             summary["platform_name"] = f"Unix / {platform.system()} {platform.release()}"
 

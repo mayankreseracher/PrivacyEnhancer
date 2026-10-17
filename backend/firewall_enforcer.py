@@ -23,7 +23,7 @@ try:
 except ImportError:
     winreg = None
 
-from .platform_helper import IS_WINDOWS, IS_LINUX, PlatformHelper
+from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS, PlatformHelper
 
 class FirewallEnforcer:
     def __init__(self):
@@ -123,7 +123,33 @@ class FirewallEnforcer:
                 return "ufw"
             elif shutil.which("firewall-cmd"):
                 return "firewalld"
+        elif IS_MACOS:
+            if shutil.which("pfctl") or os.path.exists("/sbin/pfctl"):
+                return "pfctl"
         return "none"
+
+    def _ensure_pf_anchor(self) -> bool:
+        """Ensures that anchor trackercontrol and table <tc_blocked_ips> exist in macOS pf."""
+        if not (IS_MACOS or shutil.which("pfctl") or os.path.exists("/sbin/pfctl")):
+            return False
+        # Enable pf if disabled
+        self._run_cmd(["pfctl", "-e"])
+        # Initialize table and drop rule in anchor trackercontrol
+        pf_conf = (
+            "table <tc_blocked_ips> persist\n"
+            "block drop out quick proto {tcp, udp} to <tc_blocked_ips>\n"
+        )
+        try:
+            p = subprocess.run(
+                ["pfctl", "-a", "trackercontrol", "-f", "-"],
+                input=pf_conf,
+                text=True,
+                capture_output=True,
+                timeout=5
+            )
+            return p.returncode == 0
+        except Exception:
+            return False
 
     def _run_cmd(self, cmd: List[str]) -> Tuple[bool, str]:
         try:
@@ -180,6 +206,35 @@ class FirewallEnforcer:
                 success, out = self._run_cmd(cmd)
                 return {"success": success, "backend": "iptables", "rule_name": rule_name, "output": out}
 
+        elif IS_MACOS:
+            fw_bin = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+            target_path = exe_path if exe_path and os.path.exists(exe_path) else None
+            if target_path and (".app" in target_path or os.path.isdir(target_path)):
+                bundle_path = target_path
+                if ".app/" in target_path:
+                    bundle_path = target_path[:target_path.find(".app") + 4]
+                self._run_cmd([fw_bin, "--add", bundle_path])
+                success, out = self._run_cmd([fw_bin, "--blockapp", bundle_path])
+                return {"success": success, "backend": "socketfilterfw", "rule_name": rule_name, "output": out}
+
+            uid = self._get_process_uid(exe_path, app_name)
+            if uid is not None and uid >= 500:
+                self._ensure_pf_anchor()
+                pf_rule = f"block drop out proto {{tcp, udp}} from any to any user {uid}\n"
+                try:
+                    p = subprocess.run(
+                        ["pfctl", "-a", f"trackercontrol_app_{uid}", "-f", "-"],
+                        input=pf_rule,
+                        text=True,
+                        capture_output=True,
+                        timeout=5
+                    )
+                    return {"success": p.returncode == 0, "backend": "pfctl_uid", "rule_name": rule_name}
+                except Exception as e:
+                    return {"success": False, "backend": "pfctl_uid", "error": str(e)}
+
+            return {"success": False, "backend": "none", "error": f"Could not determine macOS application path or UID for {app_name}"}
+
         logger.warning(f"No supported firewall backend found to block executable: {app_name}")
         return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
@@ -213,6 +268,17 @@ class FirewallEnforcer:
                 self._run_cmd(["iptables", "-D", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-m", "comment", "--comment", "TrackerControl", "-j", "DROP"])
                 success, out = self._run_cmd(["iptables", "-D", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-j", "DROP"])
                 return {"success": success, "backend": "iptables", "output": out}
+
+        elif IS_MACOS:
+            fw_bin = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+            if ".app" in app_name:
+                bundle_path = app_name[:app_name.find(".app") + 4]
+                self._run_cmd([fw_bin, "--unblockapp", bundle_path])
+            uid = self._get_process_uid("", app_name)
+            if uid is not None:
+                self._run_cmd(["pfctl", "-a", f"trackercontrol_app_{uid}", "-F", "all"])
+            return {"success": True, "backend": "macos", "output": "Unblocked"}
+
 
         logger.warning(f"No supported firewall backend found to unblock executable: {app_name}")
         return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
@@ -254,6 +320,11 @@ class FirewallEnforcer:
                 success, out = self._run_cmd(["ufw", "deny", "out", "to", ip_address])
                 return {"success": success, "backend": "ufw", "output": out}
 
+        elif IS_MACOS:
+            self._ensure_pf_anchor()
+            success, out = self._run_cmd(["pfctl", "-a", "trackercontrol", "-t", "tc_blocked_ips", "-T", "add", ip_address])
+            return {"success": success, "backend": "pfctl", "rule_name": rule_name, "output": out}
+
         logger.warning(f"No supported firewall backend found to block IP: {ip_address}")
         return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
@@ -286,6 +357,10 @@ class FirewallEnforcer:
                 success, out = self._run_cmd(["ufw", "delete", "deny", "out", "to", ip_address])
                 return {"success": success, "output": out}
 
+        elif IS_MACOS:
+            success, out = self._run_cmd(["pfctl", "-a", "trackercontrol", "-t", "tc_blocked_ips", "-T", "delete", ip_address])
+            return {"success": success, "backend": "pfctl", "output": out}
+
         logger.warning(f"No supported firewall backend found to unblock IP: {ip_address}")
         return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
@@ -297,6 +372,8 @@ class FirewallEnforcer:
             return self.get_windows_privacy_status()
         elif IS_LINUX:
             return self.get_linux_privacy_status()
+        elif IS_MACOS:
+            return self.get_macos_privacy_status()
         return {"os": "Unknown", "telemetry_services": []}
 
     def get_windows_privacy_status(self) -> Dict[str, Any]:
@@ -421,6 +498,85 @@ class FirewallEnforcer:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def get_macos_privacy_status(self) -> Dict[str, Any]:
+        """Queries status of macOS telemetry, analytics, and privacy settings."""
+        status = {
+            "os": "macOS",
+            "services": {}
+        }
+        if not IS_MACOS:
+            return status
+
+        # 1. Diagnostics & Crash Reporting (AutoSubmitDiagnostics)
+        success, out = self._run_cmd(["defaults", "read", "-g", "AutoSubmitDiagnostics"])
+        auto_submit = "1" in out or "true" in out.lower() if success else False
+        status["services"]["auto_submit"] = {
+            "name": "Apple Diagnostic & Usage Reports",
+            "running": auto_submit,
+            "installed": True,
+            "description": "Automatically submits diagnostic, performance, and crash logs to Apple servers (CrashReporter / diagnosticd)."
+        }
+
+        # 2. Personalized Advertising (allowApplePersonalizedAdvertising)
+        success, out = self._run_cmd(["defaults", "read", "com.apple.AdLib", "allowApplePersonalizedAdvertising"])
+        ad_enabled = "1" in out or "true" in out.lower() if success else False
+        status["services"]["personalized_ads"] = {
+            "name": "Apple Personalized Advertising",
+            "running": ad_enabled,
+            "installed": True,
+            "description": "Apple targeted advertising identifier and ad-tracking telemetry profile across App Store and News."
+        }
+
+        # 3. Safari & Siri Search Suggestions Telemetry (SuppressSearchSuggestions)
+        success, out = self._run_cmd(["defaults", "read", "com.apple.Safari", "SuppressSearchSuggestions"])
+        suppressed = "1" in out or "true" in out.lower() if success else False
+        status["services"]["safari_suggestions"] = {
+            "name": "Siri & Safari Search Telemetry",
+            "running": not suppressed,
+            "installed": True,
+            "description": "Transmits keystrokes and search queries in Safari and Spotlight to Apple servers for suggestions."
+        }
+
+        # 4. Analytics Daemon (analyticsd)
+        success, out = self._run_cmd(["launchctl", "list"])
+        analytics_active = "analyticsd" in out or "diagnosticd" in out if success else False
+        status["services"]["analyticsd"] = {
+            "name": "macOS Core Analytics Daemon (analyticsd)",
+            "running": analytics_active,
+            "installed": True,
+            "description": "Background system telemetry daemon collecting daily user experience, battery, and app usage metrics."
+        }
+
+        return status
+
+    def toggle_macos_telemetry(self, service: str, disable: bool) -> Dict[str, Any]:
+        """Toggles macOS telemetry and privacy features."""
+        tgt = service.lower().strip()
+        val_str = "false" if disable else "true"
+        neg_val_str = "true" if disable else "false"
+
+        if tgt in ("auto_submit", "diagnostics", "crashreporter"):
+            self._run_cmd(["defaults", "write", "-g", "AutoSubmitDiagnostics", "-bool", val_str])
+            return {"success": True, "service": service, "disabled": disable}
+
+        elif tgt in ("personalized_ads", "advertising_id", "adlib"):
+            self._run_cmd(["defaults", "write", "com.apple.AdLib", "allowApplePersonalizedAdvertising", "-bool", val_str])
+            return {"success": True, "service": service, "disabled": disable}
+
+        elif tgt in ("safari_suggestions", "siri", "spotlight"):
+            self._run_cmd(["defaults", "write", "com.apple.Safari", "SuppressSearchSuggestions", "-bool", neg_val_str])
+            self._run_cmd(["defaults", "write", "com.apple.Safari", "UniversalSearchEnabled", "-bool", val_str])
+            return {"success": True, "service": service, "disabled": disable}
+
+        elif tgt in ("analyticsd", "diagnosticd"):
+            if disable:
+                self._run_cmd(["launchctl", "unload", "-w", "/System/Library/LaunchDaemons/com.apple.analyticsd.plist"])
+            else:
+                self._run_cmd(["launchctl", "load", "-w", "/System/Library/LaunchDaemons/com.apple.analyticsd.plist"])
+            return {"success": True, "service": service, "disabled": disable}
+
+        return {"success": False, "error": f"Unknown macOS telemetry service: {service}"}
+
     def flush_all_tc_rules(self) -> Dict[str, Any]:
         """Flushes only rules created by TrackerControl without flushing or affecting other system firewall rules."""
         if IS_WINDOWS:
@@ -462,4 +618,8 @@ class FirewallEnforcer:
                 self._run_cmd(["nft", "delete", "table", "inet", "trackercontrol"])
 
             return {"success": True, "output": f"Flushed TrackerControl rules ({flushed_count} iptables rules removed)"}
+        elif IS_MACOS:
+            self._run_cmd(["pfctl", "-a", "trackercontrol", "-F", "all"])
+            self._run_cmd(["pfctl", "-a", "trackercontrol", "-t", "tc_blocked_ips", "-T", "flush"])
+            return {"success": True, "output": "Flushed macOS PF TrackerControl anchors"}
         return {"success": True, "output": "No rules to flush"}

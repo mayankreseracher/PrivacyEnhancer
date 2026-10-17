@@ -10,6 +10,7 @@ Discovers installed and running applications across Windows and all Linux Distri
 import os
 import sys
 import shutil
+import plistlib
 import psutil
 from typing import Dict, Any, List, Set, Optional
 
@@ -18,7 +19,7 @@ try:
 except ImportError:
     winreg = None
 
-from .platform_helper import IS_WINDOWS, IS_LINUX
+from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS
 
 SYSTEM_PROCESSES_WIN = {
     "system", "registry", "smss.exe", "csrss.exe", "wininit.exe", "services.exe",
@@ -30,6 +31,12 @@ SYSTEM_PROCESSES_LINUX = {
     "kworker", "idle_inject", "systemd-journal", "systemd-udevd", "cron", "dbus-daemon"
 }
 
+SYSTEM_PROCESSES_MACOS = {
+    "launchd", "kernel_task", "kextd", "logd", "syslogd", "UserEventAgent",
+    "fseventsd", "mediaremoted", "coreaudiod", "WindowServer", "loginwindow",
+    "diskarbitrationd", "notifyd", "securityd", "powerd", "analyticsd", "diagnosticd"
+}
+
 LINUX_DESKTOP_DIRS = [
     "/usr/share/applications",
     "/usr/local/share/applications",
@@ -37,6 +44,13 @@ LINUX_DESKTOP_DIRS = [
     "/var/lib/flatpak/exports/share/applications",
     os.path.expanduser("~/.local/share/flatpak/exports/share/applications"),
     "/var/lib/snapd/desktop/applications",
+]
+
+MACOS_APP_DIRS = [
+    "/Applications",
+    "/System/Applications",
+    "/System/Applications/Utilities",
+    os.path.expanduser("~/Applications")
 ]
 
 def guess_app_category(name: str, exe: str, categories_str: str = "") -> str:
@@ -253,6 +267,78 @@ class AppDiscovery:
                 pass
         return discovered
 
+    # ==================== macOS Application Discovery ====================
+
+    def scan_macos_apps(self) -> List[Dict[str, Any]]:
+        """Scans macOS /Applications, /System/Applications, and ~/Applications for .app bundles."""
+        if not IS_MACOS and not os.path.exists("/Applications"):
+            return []
+
+        apps = []
+        seen_paths = set()
+
+        for base_dir in MACOS_APP_DIRS:
+            if not os.path.isdir(base_dir):
+                continue
+
+            try:
+                for item in os.listdir(base_dir):
+                    if item.endswith(".app"):
+                        app_bundle = os.path.join(base_dir, item)
+                        if app_bundle in seen_paths:
+                            continue
+                        seen_paths.add(app_bundle)
+
+                        app_info = self._parse_macos_app_bundle(app_bundle)
+                        if app_info:
+                            apps.append(app_info)
+            except Exception:
+                continue
+
+        return apps
+
+    def _parse_macos_app_bundle(self, bundle_path: str) -> Optional[Dict[str, Any]]:
+        """Extracts metadata from a macOS .app bundle's Info.plist."""
+        plist_path = os.path.join(bundle_path, "Contents", "Info.plist")
+        folder_name = os.path.basename(bundle_path)[:-4]  # strip .app
+
+        name = folder_name
+        version = ""
+        category_str = ""
+        executable_name = ""
+
+        if os.path.exists(plist_path):
+            try:
+                with open(plist_path, "rb") as f:
+                    plist_data = plistlib.load(f)
+                    name = plist_data.get("CFBundleDisplayName") or plist_data.get("CFBundleName") or folder_name
+                    version = plist_data.get("CFBundleShortVersionString") or plist_data.get("CFBundleVersion") or ""
+                    category_str = plist_data.get("LSApplicationCategoryType") or ""
+                    executable_name = plist_data.get("CFBundleExecutable") or ""
+            except Exception:
+                pass
+
+        if not executable_name:
+            executable_name = folder_name
+
+        macos_bin_path = os.path.join(bundle_path, "Contents", "MacOS", executable_name)
+        exe_path = macos_bin_path if os.path.exists(macos_bin_path) else bundle_path
+
+        category = guess_app_category(name, executable_name, category_str)
+        publisher = "Apple System Application" if "/System/" in bundle_path else "macOS Application"
+
+        return {
+            "name": name,
+            "process_name": executable_name,
+            "exe_path": exe_path,
+            "bundle_path": bundle_path,
+            "publisher": publisher,
+            "version": version,
+            "category": category,
+            "icon": get_category_icon(category),
+            "source": "macos_apps"
+        }
+
     # ==================== Running Process Discovery (Cross-Platform) ====================
 
     def scan_running_processes(self) -> List[Dict[str, Any]]:
@@ -276,6 +362,9 @@ class AppDiscovery:
                 if IS_LINUX:
                     if ppid == 2 or p_name.startswith("[") or p_lower in SYSTEM_PROCESSES_LINUX:
                         continue
+                # macOS system process filter
+                if IS_MACOS and p_lower in SYSTEM_PROCESSES_MACOS:
+                    continue
 
                 if p_lower in seen_names:
                     continue
@@ -346,7 +435,22 @@ class AppDiscovery:
                     if app.get("version"):
                         all_apps[key]["version"] = app["version"]
 
-        # 4. Check existing apps in TrackerControl DB
+        # 4. macOS .app bundles if on macOS
+        if IS_MACOS or (not IS_WINDOWS and not IS_LINUX and os.path.exists("/Applications")):
+            for app in self.scan_macos_apps():
+                key = app["process_name"].lower()
+                if key not in all_apps:
+                    app["is_running"] = False
+                    all_apps[key] = app
+                else:
+                    all_apps[key]["name"] = app["name"]
+                    all_apps[key]["publisher"] = app["publisher"]
+                    if app.get("version"):
+                        all_apps[key]["version"] = app["version"]
+                    if app.get("bundle_path"):
+                        all_apps[key]["bundle_path"] = app["bundle_path"]
+
+        # 5. Check existing apps in TrackerControl DB
         existing_apps = {a["process_name"].lower(): a for a in self.database.get_all_apps()}
 
         result_list = []

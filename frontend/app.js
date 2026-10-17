@@ -10,9 +10,15 @@ const state = {
   connections: [],
   apps: [],
   rules: [],
-  currentTab: 'radarTab',
+  currentTab: 'graphTab',
   filter: 'all',
   searchQuery: '',
+  bandwidthHistory: [],
+  alerts: [],
+  unreadAlertsCount: 0,
+  graphPaused: false,
+  graphWindowSeconds: 60,
+  alertFilter: 'all',
   stats: {
     total_requests: 0,
     blocked_trackers: 0,
@@ -126,8 +132,24 @@ function initWebSocket() {
           state.connections = msg.data.recent_connections;
           renderWaterfall();
         }
+        if (msg.data.bandwidth_history && Array.isArray(msg.data.bandwidth_history)) {
+          state.bandwidthHistory = msg.data.bandwidth_history;
+          if (state.bandwidthHistory.length > 0) {
+            updateSpeedometers(state.bandwidthHistory[state.bandwidthHistory.length - 1]);
+          }
+        }
+        if (msg.data.recent_alerts && Array.isArray(msg.data.recent_alerts)) {
+          state.alerts = msg.data.recent_alerts;
+          state.unreadAlertsCount = state.alerts.length;
+          updateAlertsBadge();
+          renderAlertsFeed();
+        }
       } else if (msg.type === "NEW_CONNECTION") {
         handleNewConnection(msg.data);
+      } else if (msg.type === "BANDWIDTH_TICK") {
+        handleBandwidthTick(msg.data);
+      } else if (msg.type === "SECURITY_ALERT") {
+        handleSecurityAlert(msg.data);
       }
     } catch (err) {
       console.error("WS Parse error:", err);
@@ -172,6 +194,384 @@ function handleNewConnection(conn) {
       tbody.removeChild(tbody.lastChild);
     }
   }
+}
+
+// ==================== GlassWire Bandwidth & Speedometers ====================
+function handleBandwidthTick(point) {
+  if (!point) return;
+  state.bandwidthHistory.push(point);
+  if (state.bandwidthHistory.length > 600) {
+    state.bandwidthHistory.shift();
+  }
+  updateSpeedometers(point);
+}
+
+function updateSpeedometers(point) {
+  if (!point) return;
+  const rxEl = document.getElementById("graphRxSpeed");
+  const txEl = document.getElementById("graphTxSpeed");
+  const totRxEl = document.getElementById("graphTotalRx");
+  const totTxEl = document.getElementById("graphTotalTx");
+  const dropEl = document.getElementById("graphDroppedCount");
+  const socksEl = document.getElementById("graphActiveSocketsCount");
+
+  if (rxEl) rxEl.textContent = (point.rx_kbps || 0).toFixed(2);
+  if (txEl) txEl.textContent = (point.tx_kbps || 0).toFixed(2);
+  if (totRxEl) totRxEl.textContent = `${(point.total_rx_mb || 0).toFixed(2)} MB`;
+  if (totTxEl) totTxEl.textContent = `${(point.total_tx_mb || 0).toFixed(2)} MB`;
+  if (dropEl) dropEl.textContent = state.stats.blocked_trackers.toLocaleString();
+  if (socksEl) socksEl.textContent = (state.stats.monitored_apps || state.apps.length || 0).toString();
+}
+
+// ==================== GlassWire Security Alerts ====================
+function handleSecurityAlert(alertItem) {
+  if (!alertItem) return;
+  state.alerts.unshift(alertItem);
+  if (state.alerts.length > 200) {
+    state.alerts.pop();
+  }
+  state.unreadAlertsCount++;
+  updateAlertsBadge();
+  renderAlertsFeed();
+}
+
+function updateAlertsBadge() {
+  const badge = document.getElementById("alertsNavBadge");
+  if (!badge) return;
+  if (state.unreadAlertsCount > 0) {
+    badge.textContent = state.unreadAlertsCount > 99 ? "99+" : state.unreadAlertsCount.toString();
+    badge.style.display = "inline-block";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
+function renderAlertsFeed() {
+  const container = document.getElementById("alertsFeedContainer");
+  if (!container) return;
+
+  const countAll = document.getElementById("alertCountAll");
+  const countNewApp = document.getElementById("alertCountNewApp");
+  const countBlocked = document.getElementById("alertCountBlocked");
+
+  const totalAll = state.alerts.length;
+  const totalNewApps = state.alerts.filter(a => a.type === "NEW_APP").length;
+  const totalBlocked = state.alerts.filter(a => a.type === "TRACKER_BLOCKED").length;
+
+  if (countAll) countAll.textContent = totalAll;
+  if (countNewApp) countNewApp.textContent = totalNewApps;
+  if (countBlocked) countBlocked.textContent = totalBlocked;
+
+  let filtered = state.alerts;
+  if (state.alertFilter === "NEW_APP") {
+    filtered = state.alerts.filter(a => a.type === "NEW_APP");
+  } else if (state.alertFilter === "TRACKER_BLOCKED") {
+    filtered = state.alerts.filter(a => a.type === "TRACKER_BLOCKED");
+  } else if (state.alertFilter === "warning") {
+    filtered = state.alerts.filter(a => a.severity === "warning" || a.severity === "critical");
+  }
+
+  if (filtered.length === 0) {
+    container.innerHTML = `
+      <div class="glass-panel" style="padding: 40px; text-align: center; color: var(--text-muted);">
+        No security alerts found in current filter. All network sockets are safe!
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = "";
+  filtered.forEach(alert => {
+    const card = document.createElement("div");
+    card.className = `alert-card severity-${alert.severity || 'info'}`;
+    const pName = alert.process_name || 'App';
+    const isNewApp = alert.type === "NEW_APP";
+
+    card.innerHTML = `
+      <div class="alert-left-content">
+        <div class="alert-icon-avatar">
+          ${isNewApp ? getAppIcon(pName) : '🛡️'}
+        </div>
+        <div class="alert-details">
+          <h4>
+            <span>${escapeHtml(alert.title || 'Security Notification')}</span>
+            <span class="badge ${alert.severity === 'warning' ? 'badge-blocked' : 'badge-allowed'}">
+              ${isNewApp ? '✨ First Network Access' : '🚫 Threat Blocked'}
+            </span>
+          </h4>
+          <p>${escapeHtml(alert.message || '')}</p>
+          <div class="alert-tag-row">
+            <span class="alert-chip">📦 ${escapeHtml(pName)}</span>
+            ${alert.domain ? `<span class="alert-chip">🌐 ${escapeHtml(alert.domain)}</span>` : ''}
+            ${alert.ip ? `<span class="alert-chip">📍 ${escapeHtml(alert.ip)}</span>` : ''}
+            ${alert.company ? `<span class="alert-chip">🏢 ${escapeHtml(alert.company)}</span>` : ''}
+            ${alert.category ? `<span class="alert-chip">🏷️ ${escapeHtml(alert.category)}</span>` : ''}
+            <span class="alert-time">🕒 ${formatTime(alert.timestamp || (Date.now()/1000))}</span>
+          </div>
+        </div>
+      </div>
+      <div class="alert-right-actions">
+        ${isNewApp ? `
+          <button class="btn-action" onclick="setAppPolicy('${escapeHtml(pName)}', 'block_trackers'); alert('Shield armed for ${escapeHtml(pName)}! Trackers will be dropped.')">
+            🛡️ Shield Trackers
+          </button>
+          <button class="btn-action btn-danger" onclick="setAppPolicy('${escapeHtml(pName)}', 'block_all'); alert('${escapeHtml(pName)} outbound network access firewalled.')">
+            🛑 Block All
+          </button>
+        ` : `
+          <span class="badge badge-blocked" style="padding: 6px 12px; font-weight: 700;">Neutralized 🛡️</span>
+        `}
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+// ==================== Live Network Activity Wave Graph (GlassWire Canvas) ====================
+let graphAnimFrameId = null;
+
+function initNetworkGraph() {
+  const canvas = document.getElementById("networkGraphCanvas");
+  if (!canvas) return;
+
+  const ctx = canvas.getContext("2d");
+
+  // Handle Resize & DPI Scaling
+  function resizeCanvas() {
+    if (!canvas.parentElement) return;
+    const rect = canvas.parentElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+  }
+
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+  // Time buttons setup
+  document.querySelectorAll(".time-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".time-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.graphWindowSeconds = parseInt(btn.getAttribute("data-seconds")) || 60;
+    });
+  });
+
+  // Pause / Resume graph
+  const pauseBtn = document.getElementById("toggleGraphPauseBtn");
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => {
+      state.graphPaused = !state.graphPaused;
+      pauseBtn.textContent = state.graphPaused ? "▶️ Resume" : "⏸️ Pause";
+      pauseBtn.classList.toggle("btn-danger", state.graphPaused);
+    });
+  }
+
+  // Alerts Clear Button
+  const clearAlertsBtn = document.getElementById("clearAlertsBtn");
+  if (clearAlertsBtn) {
+    clearAlertsBtn.addEventListener("click", async () => {
+      try {
+        await fetch("/api/alerts/clear", { method: "POST" });
+        state.alerts = [];
+        state.unreadAlertsCount = 0;
+        updateAlertsBadge();
+        renderAlertsFeed();
+      } catch (e) {
+        console.error("Error clearing alerts:", e);
+      }
+    });
+  }
+
+  // Alerts filter buttons
+  document.querySelectorAll(".alert-filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".alert-filter-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.alertFilter = btn.getAttribute("data-alert-filter");
+      renderAlertsFeed();
+    });
+  });
+
+  // Render Loop
+  function drawGraph() {
+    if (!canvas.parentElement) return;
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    if (width === 0 || height === 0) {
+      graphAnimFrameId = requestAnimationFrame(drawGraph);
+      return;
+    }
+
+    ctx.clearRect(0, 0, width, height);
+
+    // Filter points in selected window
+    const now = Date.now() / 1000;
+    const windowSecs = state.graphWindowSeconds || 60;
+    const minTime = now - windowSecs;
+
+    // Use current history or mock baseline if starting empty
+    let points = state.bandwidthHistory.filter(p => p.timestamp >= minTime);
+    if (points.length < 2) {
+      points = [
+        { timestamp: minTime, rx_kbps: 0, tx_kbps: 0, blocked_recent: 0 },
+        { timestamp: now, rx_kbps: 0, tx_kbps: 0, blocked_recent: 0 }
+      ];
+    }
+
+    // Determine max peak for auto-scaling
+    let maxKbps = 20; // baseline floor
+    points.forEach(p => {
+      if (p.rx_kbps > maxKbps) maxKbps = p.rx_kbps;
+      if (p.tx_kbps > maxKbps) maxKbps = p.tx_kbps;
+    });
+    maxKbps = Math.ceil(maxKbps * 1.25); // 25% headroom
+
+    const paddingLeft = 50;
+    const paddingBottom = 26;
+    const paddingTop = 16;
+    const paddingRight = 18;
+
+    const plotW = Math.max(10, width - paddingLeft - paddingRight);
+    const plotH = Math.max(10, height - paddingTop - paddingBottom);
+
+    // Draw horizontal grid lines & scale labels
+    ctx.font = "10px 'JetBrains Mono', monospace";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+
+    const gridLines = 4;
+    for (let i = 0; i <= gridLines; i++) {
+      const yVal = (maxKbps / gridLines) * i;
+      const yPos = paddingTop + plotH - (plotH * (i / gridLines));
+
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.moveTo(paddingLeft, yPos);
+      ctx.lineTo(width - paddingRight, yPos);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = "rgba(160, 174, 192, 0.7)";
+      const label = yVal >= 1024 ? `${(yVal/1024).toFixed(1)}M` : `${Math.round(yVal)}K`;
+      ctx.fillText(label, paddingLeft - 8, yPos);
+    }
+
+    // Coordinates mapping
+    function getX(ts) {
+      const ratio = (ts - minTime) / windowSecs;
+      return paddingLeft + Math.max(0, Math.min(1, ratio)) * plotW;
+    }
+
+    function getY(kbps) {
+      const ratio = kbps / maxKbps;
+      return paddingTop + plotH - (Math.max(0, Math.min(1, ratio)) * plotH);
+    }
+
+    // Function to draw smooth wave path with gradient fill
+    function drawWave(key, strokeColor, fillColorTop, fillColorBottom) {
+      if (points.length < 2) return;
+
+      const pathPoints = points.map(p => ({ x: getX(p.timestamp), y: getY(p[key] || 0) }));
+
+      ctx.save();
+      // Wave outline
+      ctx.beginPath();
+      ctx.moveTo(pathPoints[0].x, pathPoints[0].y);
+
+      for (let i = 1; i < pathPoints.length; i++) {
+        const xc = (pathPoints[i - 1].x + pathPoints[i].x) / 2;
+        const yc = (pathPoints[i - 1].y + pathPoints[i].y) / 2;
+        ctx.quadraticCurveTo(pathPoints[i - 1].x, pathPoints[i - 1].y, xc, yc);
+      }
+      ctx.lineTo(pathPoints[pathPoints.length - 1].x, pathPoints[pathPoints.length - 1].y);
+
+      // Save stroke for glowing line
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = strokeColor;
+      ctx.shadowBlur = 10;
+      ctx.stroke();
+
+      // Fill area under curve
+      const gradient = ctx.createLinearGradient(0, paddingTop, 0, paddingTop + plotH);
+      gradient.addColorStop(0, fillColorTop);
+      gradient.addColorStop(1, fillColorBottom);
+
+      ctx.lineTo(pathPoints[pathPoints.length - 1].x, paddingTop + plotH);
+      ctx.lineTo(pathPoints[0].x, paddingTop + plotH);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.shadowBlur = 0;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Draw Cyan Download (Rx) Wave
+    drawWave("rx_kbps", "#00e5ff", "rgba(0, 229, 255, 0.35)", "rgba(0, 229, 255, 0.0)");
+
+    // Draw Magenta Upload (Tx) Wave
+    drawWave("tx_kbps", "#ff007f", "rgba(255, 0, 127, 0.30)", "rgba(255, 0, 127, 0.0)");
+
+    // Draw Blocked Tracker Drop Markers
+    points.forEach(p => {
+      if (p.blocked_recent && p.blocked_recent > 0) {
+        const x = getX(p.timestamp);
+        const y = Math.min(getY(p.rx_kbps || 0), getY(p.tx_kbps || 0)) - 10;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, Math.max(paddingTop + 6, y), 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff9100";
+        ctx.shadowColor = "#ff9100";
+        ctx.shadowBlur = 12;
+        ctx.fill();
+        ctx.restore();
+      }
+    });
+
+    // Draw Right-Edge Pulsing Playhead
+    const lastP = points[points.length - 1];
+    if (lastP) {
+      const rxX = getX(lastP.timestamp);
+      const rxY = getY(lastP.rx_kbps || 0);
+      const txY = getY(lastP.tx_kbps || 0);
+
+      // Cyan pulse dot
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(rxX, rxY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "#00e5ff";
+      ctx.shadowColor = "#00e5ff";
+      ctx.shadowBlur = 14;
+      ctx.fill();
+
+      // Magenta pulse dot
+      ctx.beginPath();
+      ctx.arc(rxX, txY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "#ff007f";
+      ctx.shadowColor = "#ff007f";
+      ctx.shadowBlur = 14;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (!state.graphPaused) {
+      graphAnimFrameId = requestAnimationFrame(drawGraph);
+    } else {
+      setTimeout(() => {
+        graphAnimFrameId = requestAnimationFrame(drawGraph);
+      }, 500);
+    }
+  }
+
+  // Start graph loop
+  if (graphAnimFrameId) cancelAnimationFrame(graphAnimFrameId);
+  graphAnimFrameId = requestAnimationFrame(drawGraph);
 }
 
 function matchesFilter(conn) {
@@ -308,12 +708,18 @@ function renderAppMatrix() {
       </div>
 
       <div>
-        <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Firewall & Tracker Policy:</label>
-        <select class="app-action-select" onchange="setAppPolicy('${escapeHtml(app.process_name)}', this.value)">
-          <option value="block_trackers" ${app.control_mode === 'block_trackers' ? 'selected' : ''}>🛡️ Block Trackers Only (App Works Normally)</option>
-          <option value="block_all" ${app.control_mode === 'block_all' ? 'selected' : ''}>🛑 Block All Internet Access</option>
-          <option value="allow_all" ${app.control_mode === 'allow_all' ? 'selected' : ''}>🟢 Allow All Traffic</option>
-        </select>
+        <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">GlassWire Firewall & Tracker Policy:</label>
+        <div class="app-firewall-buttons">
+          <button class="app-fw-btn ${app.control_mode === 'allow_all' ? 'active-allow' : ''}" onclick="setAppPolicy('${escapeHtml(app.process_name)}', 'allow_all')">
+            🟢 Allow All
+          </button>
+          <button class="app-fw-btn ${app.control_mode === 'block_trackers' ? 'active-trackers' : ''}" onclick="setAppPolicy('${escapeHtml(app.process_name)}', 'block_trackers')">
+            🛡️ Drop Trackers
+          </button>
+          <button class="app-fw-btn ${app.control_mode === 'block_all' ? 'active-block' : ''}" onclick="setAppPolicy('${escapeHtml(app.process_name)}', 'block_all')">
+            🚫 Firewall App
+          </button>
+        </div>
       </div>
     `;
     container.appendChild(card);
@@ -327,6 +733,11 @@ async function setAppPolicy(appName, mode) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode })
     });
+    const found = state.apps.find(a => a.process_name === appName);
+    if (found) {
+      found.control_mode = mode;
+      renderAppMatrix();
+    }
   } catch (err) {
     console.error("Error setting app policy:", err);
   }
@@ -459,18 +870,66 @@ function renderOsPrivacy(osInfo, privStatus) {
 
   const isLinux = osInfo.is_linux;
   const isWindows = osInfo.is_windows;
+  const isMac = osInfo.is_macos || (osInfo.platform_name && osInfo.platform_name.toLowerCase().includes("mac"));
 
   if (badge) {
     if (isLinux) {
       badge.textContent = `🐧 ${osInfo.platform_name || 'Linux'}`;
     } else if (isWindows) {
       badge.textContent = `🖥️ ${osInfo.platform_name || 'Windows'}`;
+    } else if (isMac) {
+      badge.textContent = `🍎 ${osInfo.platform_name || 'macOS'}`;
     } else {
       badge.textContent = `💻 ${osInfo.platform_name || 'Host OS'}`;
     }
   }
 
-  if (isLinux) {
+  if (isMac) {
+    if (tabIcon) tabIcon.textContent = "🍎";
+    if (tabTitle) tabTitle.textContent = "macOS Privacy & Telemetry";
+    if (debloaterTitle) debloaterTitle.textContent = `macOS Privacy & Telemetry Neutralizer (${osInfo.platform_name || 'macOS'})`;
+    if (debloaterSubtitle) debloaterSubtitle.textContent = `BSD Packet Filter: ${osInfo.firewall_backend || 'pfctl'}. Block background Apple telemetry, crash collectors, personalized ad profiling, and Siri search leaks.`;
+
+    const services = privStatus.services || {};
+    const serviceKeys = Object.keys(services);
+
+    if (serviceKeys.length === 0) {
+      listContainer.innerHTML = `<div class="glass-panel" style="padding: 20px; text-align: center; color: var(--text-muted);">macOS telemetry status loaded. System is hardened!</div>`;
+      return;
+    }
+
+    serviceKeys.forEach(sKey => {
+      const s = services[sKey];
+      const card = document.createElement("div");
+      card.className = "glass-panel os-item";
+      const isRunning = s.running;
+
+      card.innerHTML = `
+        <div class="os-item-info">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h4>${escapeHtml(s.name || sKey)}</h4>
+            <span class="badge ${isRunning ? 'badge-blocked' : 'badge-allowed'}">
+              ${isRunning ? '⚠️ Telemetry Active' : '🛡️ Neutralized & Silenced'}
+            </span>
+          </div>
+          <p>${escapeHtml(s.description)}</p>
+        </div>
+        <div>
+          ${isRunning ? `
+            <button class="btn-action btn-danger" onclick="toggleTelemetryService('${sKey}', true)">
+              🚫 Neutralize Telemetry
+            </button>
+          ` : `
+            <button class="btn-action" onclick="toggleTelemetryService('${sKey}', false)">
+              🔄 Re-enable
+            </button>
+          `}
+        </div>
+      `;
+      listContainer.appendChild(card);
+    });
+
+  } else if (isLinux) {
     if (tabIcon) tabIcon.textContent = "🐧";
     if (tabTitle) tabTitle.textContent = "Linux Telemetry Neutralizer";
     if (debloaterTitle) debloaterTitle.textContent = `Linux OS Telemetry & Privacy Shield (${osInfo.platform_name || 'Universal Linux'})`;
@@ -554,7 +1013,7 @@ function renderOsPrivacy(osInfo, privStatus) {
           </div>
           <p>Secondary Microsoft push routing and enterprise telemetry conduit.</p>
         </div>
-        <button class="btn-action ${dmwapRunning ? 'btn-danger' : ''}" onclick="toggleOsFeature('diagtrack', ${dmwapRunning})">
+        <button class="btn-action ${dmwapRunning ? 'btn-danger' : ''}" onclick="toggleOsFeature('dmwappushservice', ${dmwapRunning})">
           ${dmwapRunning ? '🚫 Silence Service' : '🔄 Enable Service'}
         </button>
       </div>
@@ -647,6 +1106,7 @@ function escapeHtml(text) {
 
 document.addEventListener("DOMContentLoaded", () => {
   initWebSocket();
+  initNetworkGraph();
   loadApps();
   renderSurveillanceMatrix();
   loadRules();
@@ -660,9 +1120,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
       btn.classList.add("active");
       const targetTab = btn.getAttribute("data-tab");
-      document.getElementById(targetTab).classList.add("active");
+      const targetSec = document.getElementById(targetTab);
+      if (targetSec) targetSec.classList.add("active");
       state.currentTab = targetTab;
 
+      if (targetTab === "graphTab") {
+        const canvas = document.getElementById("networkGraphCanvas");
+        if (canvas && canvas.parentElement) {
+          const rect = canvas.parentElement.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = rect.width * dpr;
+          canvas.height = rect.height * dpr;
+          const ctx = canvas.getContext("2d");
+          ctx.scale(dpr, dpr);
+        }
+      }
+      if (targetTab === "alertsTab") {
+        state.unreadAlertsCount = 0;
+        updateAlertsBadge();
+        renderAlertsFeed();
+      }
       if (targetTab === "appMatrixTab") loadApps();
       if (targetTab === "rulesTab") loadRules();
       if (targetTab === "vpnTab") loadVpnState();

@@ -7,6 +7,7 @@ Cross-Platform Firewall Enforcer, Database, and WebSocket Event Bus.
 import asyncio
 import json
 import time
+import psutil
 from typing import Dict, Any, List, Set, Optional
 from fastapi import WebSocket
 
@@ -40,6 +41,24 @@ class TrackerEngine:
         self.recent_events_cache: List[Dict[str, Any]] = []
         self.max_cache_size = 100
 
+        # GlassWire-style Live Bandwidth & Alerts Engine
+        self.bandwidth_history: List[Dict[str, Any]] = []
+        self.max_bandwidth_history = 120
+        self.last_io_bytes = None
+        self.last_io_time = None
+        self._bandwidth_task = None
+
+        self.alerts: List[Dict[str, Any]] = []
+        self.max_alerts = 200
+        self.known_apps: Set[str] = set()
+        try:
+            for app in self.database.get_all_apps():
+                p_name = app.get("process_name")
+                if p_name:
+                    self.known_apps.add(p_name.lower())
+        except Exception:
+            pass
+
         # Subsystems
         self.dns_proxy = DNSProxy(
             intelligence=self.intelligence,
@@ -59,6 +78,7 @@ class TrackerEngine:
 
         self._dns_task = None
         self._monitor_task = None
+        self._monitor_task = None
 
     def on_event(self, event: Dict[str, Any]):
         """Called whenever DNS Proxy or Process Monitor records a network connection."""
@@ -73,25 +93,119 @@ class TrackerEngine:
         if len(self.recent_events_cache) > self.max_cache_size:
             self.recent_events_cache.pop()
 
+        proc_name = event.get("process_name", "Unknown")
+        proc_key = proc_name.lower().strip()
+        now = event.get("timestamp", time.time())
+
+        # 1. GlassWire-style New App First Connection Alert
+        if proc_name not in ("Unknown", "DNS Client") and proc_key and proc_key not in self.known_apps:
+            self.known_apps.add(proc_key)
+            alert = {
+                "id": f"alert-{int(now * 1000)}-app",
+                "type": "NEW_APP",
+                "severity": "info",
+                "title": f"New Network Activity: {proc_name}",
+                "message": f"'{proc_name}' accessed the network for the first time ({event.get('domain') or event.get('ip')}).",
+                "process_name": proc_name,
+                "timestamp": now,
+                "domain": event.get("domain", ""),
+                "ip": event.get("ip", "")
+            }
+            self._add_alert(alert)
+
+        # 2. GlassWire-style Tracker Neutralized Alert
+        if event.get("status") == "blocked":
+            alert = {
+                "id": f"alert-{int(now * 1000)}-blk",
+                "type": "TRACKER_BLOCKED",
+                "severity": "warning",
+                "title": f"Tracker Blocked: {event.get('name') or event.get('company', 'Unknown')}",
+                "message": f"Neutralized {event.get('category', 'Telemetry')} connection to {event.get('domain') or event.get('ip')} from {proc_name}.",
+                "process_name": proc_name,
+                "timestamp": now,
+                "domain": event.get("domain", ""),
+                "ip": event.get("ip", ""),
+                "company": event.get("company", ""),
+                "category": event.get("category", "")
+            }
+            self._add_alert(alert)
+
         if self.active_websockets:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    loop.create_task(self.broadcast_event(event))
+                    loop.create_task(self.broadcast_message({"type": "NEW_CONNECTION", "data": event}))
             except Exception:
                 pass
 
-    async def broadcast_event(self, event: Dict[str, Any]):
+    def _add_alert(self, alert: Dict[str, Any]):
+        self.alerts.insert(0, alert)
+        if len(self.alerts) > self.max_alerts:
+            self.alerts.pop()
+        if self.active_websockets:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.broadcast_message({"type": "SECURITY_ALERT", "data": alert}))
+            except Exception:
+                pass
+
+    async def broadcast_message(self, message_dict: Dict[str, Any]):
         dead_sockets = set()
-        message = json.dumps({"type": "NEW_CONNECTION", "data": event})
+        message = json.dumps(message_dict)
         for ws in self.active_websockets:
             try:
                 await ws.send_text(message)
             except Exception:
                 dead_sockets.add(ws)
-        
         for ws in dead_sockets:
             self.active_websockets.discard(ws)
+
+    async def broadcast_event(self, event: Dict[str, Any]):
+        await self.broadcast_message({"type": "NEW_CONNECTION", "data": event})
+
+    async def _bandwidth_loop(self):
+        """1-second timer collecting live upload/download speed for GlassWire-style graph."""
+        while True:
+            try:
+                await asyncio.sleep(1.0)
+                now = time.time()
+                io = psutil.net_io_counters()
+                rx_bytes = io.bytes_recv
+                tx_bytes = io.bytes_sent
+
+                if self.last_io_bytes is not None and self.last_io_time is not None:
+                    dt = max(0.1, now - self.last_io_time)
+                    rx_speed_kbps = max(0.0, (rx_bytes - self.last_io_bytes[0]) / 1024.0 / dt)
+                    tx_speed_kbps = max(0.0, (tx_bytes - self.last_io_bytes[1]) / 1024.0 / dt)
+                else:
+                    rx_speed_kbps = 0.0
+                    tx_speed_kbps = 0.0
+
+                self.last_io_bytes = (rx_bytes, tx_bytes)
+                self.last_io_time = now
+
+                recent_blocked = sum(1 for e in self.recent_events_cache if e.get("status") == "blocked" and now - e.get("timestamp", 0) < 5)
+
+                point = {
+                    "timestamp": now,
+                    "rx_kbps": round(rx_speed_kbps, 2),
+                    "tx_kbps": round(tx_speed_kbps, 2),
+                    "total_rx_mb": round(rx_bytes / 1024 / 1024, 2),
+                    "total_tx_mb": round(tx_bytes / 1024 / 1024, 2),
+                    "blocked_recent": recent_blocked
+                }
+
+                self.bandwidth_history.append(point)
+                if len(self.bandwidth_history) > self.max_bandwidth_history:
+                    self.bandwidth_history.pop(0)
+
+                if self.active_websockets:
+                    await self.broadcast_message({"type": "BANDWIDTH_TICK", "data": point})
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                await asyncio.sleep(1.0)
 
     async def register_websocket(self, websocket: WebSocket):
         await websocket.accept()
@@ -104,7 +218,9 @@ class TrackerEngine:
                 "shield_active": self.shield_active,
                 "protection_mode": self.protection_mode,
                 "system_summary": PlatformHelper.get_system_summary(),
-                "recent_connections": self.recent_events_cache[:30]
+                "recent_connections": self.recent_events_cache[:30],
+                "bandwidth_history": self.bandwidth_history[-60:],
+                "recent_alerts": self.alerts[:30]
             }
         }))
 
@@ -184,8 +300,14 @@ class TrackerEngine:
         self._monitor_task = asyncio.create_task(self.process_monitor.start())
         print(f"[ProcessMonitor] Real-time socket scanner active for {PlatformHelper.get_os_type()}.")
 
+        # Start GlassWire-style Live Bandwidth Monitor
+        self._bandwidth_task = asyncio.create_task(self._bandwidth_loop())
+        print(f"[BandwidthEngine] Real-time traffic graph sampler active.")
+
     async def stop(self):
         print("[Engine] Stopping TrackerControl PC...")
+        if self._bandwidth_task:
+            self._bandwidth_task.cancel()
         if self.process_monitor:
             self.process_monitor.stop()
         if self._monitor_task:
@@ -202,3 +324,13 @@ class TrackerEngine:
                 self.firewall.flush_all_tc_rules()
             except Exception as e:
                 print(f"[Engine] Notice during firewall cleanup: {e}")
+
+    def get_bandwidth_history(self) -> List[Dict[str, Any]]:
+        return self.bandwidth_history
+
+    def get_alerts(self) -> List[Dict[str, Any]]:
+        return self.alerts
+
+    def clear_alerts(self):
+        self.alerts.clear()
+
