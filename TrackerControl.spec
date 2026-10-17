@@ -58,10 +58,11 @@ hidden_imports = [
     'platform',
     'shutil',
     'subprocess',
+    'webview',
 ]
 
 if IS_WIN:
-    hidden_imports.append('winreg')
+    hidden_imports.extend(['winreg', 'clr', 'webview.platforms.winforms'])
 
 a = Analysis(
     ['main.py'],

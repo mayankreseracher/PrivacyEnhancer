@@ -6,10 +6,18 @@ Also maintains an IP -> Domain cache for process socket attribution.
 """
 
 import asyncio
+import atexit
+import os
+import shutil
 import socket
+import subprocess
+import sys
 import time
-from typing import Dict, Any, Optional, Callable
-from dnslib import DNSRecord, DNSHeader, RR, A, AAAA, QTYPE
+from typing import Dict, Any, List, Optional, Callable
+from dnslib import DNSRecord, DNSHeader, RR, A, AAAA, QTYPE, RCODE
+
+IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform.startswith("linux")
 
 class DNSProxy:
     def __init__(
@@ -35,15 +43,21 @@ class DNSProxy:
         self.protocol = None
         self.ip_to_domain_cache: Dict[str, str] = {} # IP -> Domain mapping
         self.domain_to_ip_cache: Dict[str, str] = {}
+        self.original_dns_settings: Dict[str, Any] = {}
+        self.dns_configured: bool = False
 
     def get_domain_for_ip(self, ip: str) -> Optional[str]:
         return self.ip_to_domain_cache.get(ip)
 
-    def handle_dns_query(self, data: bytes, client_addr) -> bytes:
+    async def handle_dns_query(self, data: bytes, client_addr) -> bytes:
         try:
             request = DNSRecord.parse(data)
             qname = str(request.q.qname).rstrip(".")
-            qtype = QTYPE[request.q.qtype]
+            qtype_code = request.q.qtype
+            try:
+                qtype = QTYPE.get(qtype_code, str(qtype_code))
+            except Exception:
+                qtype = str(qtype_code)
             
             # Inspect domain
             threat = self.intelligence.inspect_domain(qname)
@@ -64,17 +78,32 @@ class DNSProxy:
 
             should_block = (is_tracker or custom_block) and not custom_allow
 
-            # If blocked: generate sinkhole response (0.0.0.0 / ::)
+            # If blocked: generate sinkhole response (0.0.0.0 / ::) or NXDOMAIN
             if should_block:
-                reply = DNSRecord(
-                    DNSHeader(id=request.header.id, qr=1, aa=1, ra=1),
-                    q=request.q
-                )
-                if qtype == "A":
+                if qtype == "A" or qtype_code == 1:
+                    reply = DNSRecord(
+                        DNSHeader(id=request.header.id, qr=1, aa=1, ra=1),
+                        q=request.q
+                    )
                     reply.add_answer(RR(request.q.qname, QTYPE.A, rdata=A("0.0.0.0"), ttl=300))
-                elif qtype == "AAAA":
+                elif qtype == "AAAA" or qtype_code == 28:
+                    reply = DNSRecord(
+                        DNSHeader(id=request.header.id, qr=1, aa=1, ra=1),
+                        q=request.q
+                    )
                     reply.add_answer(RR(request.q.qname, QTYPE.AAAA, rdata=AAAA("::"), ttl=300))
+                else:
+                    # Bug 2 fix: For HTTPS (type 65), SVCB (type 64), and other record types
+                    # on blocked domains, return NXDOMAIN (rcode=3) to prevent connection leaks
+                    nxdomain_rcode = getattr(RCODE, "NXDOMAIN", 3)
+                    reply = DNSRecord(
+                        DNSHeader(id=request.header.id, qr=1, aa=1, ra=1, rcode=nxdomain_rcode),
+                        q=request.q
+                    )
 
+                # TODO: Attribution limitation - DNS requests currently log pid: None and process_name: 'DNS Client'.
+                # Correlating client_addr ephemeral port with active OS sockets via ProcessMonitor would allow
+                # identifying the true originating PID and application executable for each DNS query.
                 event = {
                     "timestamp": time.time(),
                     "pid": None,
@@ -99,8 +128,8 @@ class DNSProxy:
 
                 return reply.pack()
 
-            # Otherwise, forward upstream
-            upstream_response = self._forward_upstream(data)
+            # Otherwise, forward upstream asynchronously (Bug 1 fix)
+            upstream_response = await self._forward_upstream(data)
             if upstream_response:
                 # Cache resolved IPs
                 try:
@@ -113,7 +142,9 @@ class DNSProxy:
                 except Exception:
                     pass
 
-                # Log allowed query
+                # TODO: Attribution limitation - DNS requests currently log pid: None and process_name: 'DNS Client'.
+                # Correlating client_addr ephemeral port with active OS sockets via ProcessMonitor would allow
+                # identifying the true originating PID and application executable for each DNS query.
                 event = {
                     "timestamp": time.time(),
                     "pid": None,
@@ -141,28 +172,395 @@ class DNSProxy:
             # Fallback pass-through on parse error
             pass
 
-        return self._forward_upstream(data) or b""
+        return (await self._forward_upstream(data)) or b""
 
-    def _forward_upstream(self, data: bytes) -> Optional[bytes]:
-        """Forwards standard DNS query over UDP to upstream resolver."""
+    def _forward_upstream_sync(self, data: bytes) -> Optional[bytes]:
+        """Synchronous UDP query to upstream DNS resolver (executed in thread pool)."""
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(2.0)
             sock.sendto(data, (self.upstream_dns, self.upstream_port))
             resp, _ = sock.recvfrom(4096)
-            sock.close()
             return resp
         except Exception:
             return None
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    async def _forward_upstream(self, data: bytes) -> Optional[bytes]:
+        """
+        Asynchronously forwards standard DNS query over UDP to upstream resolver
+        using a thread pool executor, preventing blocking of the asyncio event loop (Bug 1 fix).
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, self._forward_upstream_sync, data)
+        except RuntimeError:
+            return self._forward_upstream_sync(data)
+
+    # ==================== System DNS Reconfiguration (Bug 3) ====================
+    # NOTE: configure_system_dns() and restore_system_dns() should be called from
+    # engine.py's start() and stop() methods to route system DNS traffic through this proxy.
+
+    def configure_system_dns(self) -> bool:
+        """
+        Configures the host operating system to route DNS queries to this proxy (127.0.0.1).
+        Stores original DNS settings for clean restoration when proxy stops.
+        
+        NOTE: engine.py needs to call this method in TrackerEngine.start().
+        """
+        if self.dns_configured:
+            return True
+
+        if self.listen_port != 53:
+            print(f"[DNS] Warning: DNS Proxy is listening on port {self.listen_port}, but OS resolvers query port 53.")
+
+        print(f"[DNS] Reconfiguring system DNS to {self.listen_host}...")
+        try:
+            if IS_WINDOWS:
+                self.original_dns_settings["interfaces"] = {}
+                self._configure_windows_dns()
+            elif IS_LINUX:
+                self._configure_linux_dns()
+            else:
+                print(f"[DNS] System DNS automatic reconfiguration not implemented for {sys.platform}.")
+
+            self.dns_configured = True
+            atexit.register(self.restore_system_dns)
+            return True
+        except Exception as e:
+            print(f"[DNS] Failed to configure system DNS: {e}")
+            return False
+
+    def restore_system_dns(self) -> bool:
+        """
+        Restores host operating system DNS configuration to original pre-proxy settings.
+        
+        NOTE: engine.py needs to call this method in TrackerEngine.stop().
+        """
+        if not self.dns_configured and not self.original_dns_settings:
+            return True
+
+        print("[DNS] Restoring original system DNS configuration...")
+        try:
+            if IS_WINDOWS:
+                self._restore_windows_dns()
+            elif IS_LINUX:
+                self._restore_linux_dns()
+
+            self.dns_configured = False
+            self.original_dns_settings.clear()
+            return True
+        except Exception as e:
+            print(f"[DNS] Failed to restore system DNS: {e}")
+            return False
+
+    def restore_dns(self) -> bool:
+        """Alias for restore_system_dns."""
+        return self.restore_system_dns()
+
+    def _get_active_windows_interfaces(self) -> List[str]:
+        """Finds all active, connected network interfaces on Windows."""
+        interfaces = []
+        try:
+            res = subprocess.run(
+                ["netsh", "interface", "show", "interface"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            )
+            for line in res.stdout.splitlines():
+                parts = line.strip().split(None, 3)
+                if len(parts) >= 4 and "connected" in parts[1].lower():
+                    interfaces.append(parts[3])
+        except Exception:
+            pass
+
+        # Supplement or fallback with psutil active non-loopback interfaces
+        if not interfaces:
+            try:
+                import psutil
+                for iface, stats in psutil.net_if_stats().items():
+                    if stats.isup and "loopback" not in iface.lower():
+                        interfaces.append(iface)
+            except Exception:
+                pass
+
+        return list(dict.fromkeys(interfaces))
+
+    def _get_windows_dns_config(self, iface: str) -> Dict[str, Any]:
+        """Queries and parses the current DNS configuration for a Windows network interface."""
+        config: Dict[str, Any] = {"is_dhcp": True, "servers": []}
+        try:
+            res = subprocess.run(
+                ["netsh", "interface", "ip", "show", "config", f"name={iface}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            )
+            if res.returncode == 0:
+                parsing_static = False
+                for line in res.stdout.splitlines():
+                    line_str = line.strip()
+                    if not line_str:
+                        continue
+                    lower = line_str.lower()
+                    if "statically configured dns servers" in lower:
+                        config["is_dhcp"] = False
+                        parsing_static = True
+                        parts = line_str.split(":", 1)
+                        if len(parts) > 1 and parts[1].strip():
+                            val = parts[1].strip()
+                            if any(c.isdigit() for c in val):
+                                config["servers"].append(val)
+                    elif "dns servers configured through dhcp" in lower:
+                        config["is_dhcp"] = True
+                        parsing_static = False
+                        parts = line_str.split(":", 1)
+                        if len(parts) > 1 and parts[1].strip():
+                            val = parts[1].strip()
+                            if any(c.isdigit() for c in val):
+                                config["servers"].append(val)
+                    elif parsing_static:
+                        if ":" in line_str:
+                            parsing_static = False
+                        else:
+                            val = line_str.strip()
+                            if any(c.isdigit() for c in val):
+                                config["servers"].append(val)
+        except Exception as e:
+            print(f"[DNS] Could not query DNS config for {iface}: {e}")
+        return config
+
+    def _configure_windows_dns(self):
+        """Configures DNS on Windows network interfaces to point to 127.0.0.1."""
+        interfaces = self._get_active_windows_interfaces()
+        if not interfaces:
+            print("[DNS] Notice: No active connected network interfaces detected on Windows.")
+            return
+
+        for iface in interfaces:
+            orig_config = self._get_windows_dns_config(iface)
+            self.original_dns_settings.setdefault("interfaces", {})[iface] = orig_config
+
+            cmd = ["netsh", "interface", "ip", "set", "dns", iface, "static", self.listen_host]
+            try:
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                )
+                if res.returncode == 0:
+                    print(f"[DNS] Configured Windows DNS on '{iface}' -> {self.listen_host}")
+                else:
+                    err_msg = (res.stderr or res.stdout).strip()
+                    print(f"[DNS] Notice: netsh set dns on '{iface}' returned: {err_msg}")
+            except PermissionError:
+                print(f"[DNS] Warning: Administrator elevation required to set DNS on '{iface}'.")
+            except Exception as e:
+                print(f"[DNS] Error setting DNS on '{iface}': {e}")
+
+    def _restore_windows_dns(self):
+        """Restores Windows network interfaces to their pre-proxy DNS configuration."""
+        interfaces_data = self.original_dns_settings.get("interfaces", {})
+        for iface, original in interfaces_data.items():
+            try:
+                is_dhcp = original.get("is_dhcp", True)
+                servers = original.get("servers", [])
+                if is_dhcp:
+                    res = subprocess.run(
+                        ["netsh", "interface", "ip", "set", "dns", iface, "dhcp"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                    )
+                    if res.returncode == 0:
+                        print(f"[DNS] Restored Windows DNS on '{iface}' -> DHCP")
+                    else:
+                        print(f"[DNS] Warning restoring DHCP on '{iface}': {res.stderr.strip()}")
+                else:
+                    if servers:
+                        subprocess.run(
+                            ["netsh", "interface", "ip", "set", "dns", iface, "static", servers[0]],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                        )
+                        for s in servers[1:]:
+                            subprocess.run(
+                                ["netsh", "interface", "ip", "add", "dns", iface, s],
+                                capture_output=True,
+                                text=True,
+                                timeout=5,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                            )
+                        print(f"[DNS] Restored Windows static DNS on '{iface}' -> {servers}")
+                    else:
+                        subprocess.run(
+                            ["netsh", "interface", "ip", "set", "dns", iface, "dhcp"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                        )
+                        print(f"[DNS] Restored Windows DNS on '{iface}' -> DHCP (fallback)")
+            except Exception as e:
+                print(f"[DNS] Error restoring DNS on '{iface}': {e}")
+
+    def _configure_linux_dns(self):
+        """Configures DNS on Linux by updating /etc/resolv.conf and/or using resolvectl."""
+        linux_backup: Dict[str, Any] = {
+            "resolv_conf": None,
+            "is_symlink": False,
+            "symlink_target": None,
+            "resolvectl_interfaces": []
+        }
+
+        # 1. Backup /etc/resolv.conf
+        resolv_path = "/etc/resolv.conf"
+        if os.path.exists(resolv_path) or os.path.islink(resolv_path):
+            try:
+                is_link = os.path.islink(resolv_path)
+                linux_backup["is_symlink"] = is_link
+                if is_link:
+                    linux_backup["symlink_target"] = os.readlink(resolv_path)
+
+                if os.path.exists(resolv_path):
+                    with open(resolv_path, "r", encoding="utf-8", errors="ignore") as f:
+                        linux_backup["resolv_conf"] = f.read()
+
+                try:
+                    if linux_backup["resolv_conf"]:
+                        with open("/etc/resolv.conf.trackercontrol.bak", "w", encoding="utf-8") as f:
+                            f.write(linux_backup["resolv_conf"])
+                except Exception:
+                    pass
+
+                if is_link:
+                    try:
+                        os.unlink(resolv_path)
+                    except Exception:
+                        pass
+
+                new_resolv = (
+                    "# Generated by TrackerControl PC DNS Proxy\n"
+                    f"nameserver {self.listen_host}\n"
+                    "options timeout:2 attempts:3\n"
+                )
+                with open(resolv_path, "w", encoding="utf-8") as f:
+                    f.write(new_resolv)
+                print(f"[DNS] Configured /etc/resolv.conf -> {self.listen_host}")
+            except PermissionError:
+                print("[DNS] Warning: Permission denied writing /etc/resolv.conf (run as root/sudo).")
+            except Exception as e:
+                print(f"[DNS] Failed to configure /etc/resolv.conf: {e}")
+
+        # 2. Use resolvectl if present (systemd-resolved)
+        resolvectl_bin = shutil.which("resolvectl")
+        if resolvectl_bin:
+            try:
+                res = subprocess.run(
+                    ["ip", "-o", "link", "show", "up"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if res.returncode == 0:
+                    for line in res.stdout.splitlines():
+                        parts = line.split(":", 2)
+                        if len(parts) >= 2:
+                            iface = parts[1].strip()
+                            if iface and iface != "lo" and not iface.startswith(("docker", "veth", "br-")):
+                                set_res = subprocess.run(
+                                    [resolvectl_bin, "dns", iface, self.listen_host],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5
+                                )
+                                if set_res.returncode == 0:
+                                    linux_backup["resolvectl_interfaces"].append(iface)
+                                    print(f"[DNS] Configured resolvectl dns on '{iface}' -> {self.listen_host}")
+            except Exception as e:
+                print(f"[DNS] Notice: resolvectl configuration error: {e}")
+
+        self.original_dns_settings["linux"] = linux_backup
+
+    def _restore_linux_dns(self):
+        """Restores Linux DNS configuration from saved backup."""
+        linux_backup = self.original_dns_settings.get("linux", {})
+
+        # 1. Revert resolvectl
+        resolvectl_bin = shutil.which("resolvectl")
+        if resolvectl_bin:
+            for iface in linux_backup.get("resolvectl_interfaces", []):
+                try:
+                    subprocess.run(
+                        [resolvectl_bin, "revert", iface],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    print(f"[DNS] Reverted resolvectl dns on '{iface}'")
+                except Exception:
+                    pass
+
+        # 2. Restore /etc/resolv.conf
+        resolv_path = "/etc/resolv.conf"
+        try:
+            if linux_backup.get("is_symlink") and linux_backup.get("symlink_target"):
+                if os.path.exists(resolv_path) or os.path.islink(resolv_path):
+                    os.unlink(resolv_path)
+                os.symlink(linux_backup["symlink_target"], resolv_path)
+                print(f"[DNS] Restored /etc/resolv.conf symlink -> {linux_backup['symlink_target']}")
+            elif linux_backup.get("resolv_conf") is not None:
+                with open(resolv_path, "w", encoding="utf-8") as f:
+                    f.write(linux_backup["resolv_conf"])
+                print("[DNS] Restored original /etc/resolv.conf")
+            else:
+                backup_path = "/etc/resolv.conf.trackercontrol.bak"
+                if os.path.exists(backup_path):
+                    shutil.copy2(backup_path, resolv_path)
+                    print("[DNS] Restored /etc/resolv.conf from disk backup")
+        except PermissionError:
+            print("[DNS] Warning: Permission denied restoring /etc/resolv.conf (requires root/sudo).")
+        except Exception as e:
+            print(f"[DNS] Failed to restore /etc/resolv.conf: {e}")
+
+        # Clean up backup file
+        backup_path = "/etc/resolv.conf.trackercontrol.bak"
+        if os.path.exists(backup_path):
+            try:
+                os.unlink(backup_path)
+            except Exception:
+                pass
 
 class DNSProtocol(asyncio.DatagramProtocol):
     def __init__(self, proxy: DNSProxy):
         self.proxy = proxy
-
-    def datagram_received(self, data: bytes, addr):
-        response = self.proxy.handle_dns_query(data, addr)
-        if response and self.transport:
-            self.transport.sendto(response, addr)
+        self.transport = None
 
     def connection_made(self, transport):
         self.transport = transport
+
+    def datagram_received(self, data: bytes, addr):
+        # Schedule asynchronous processing of incoming datagram so event loop is never blocked (Bug 1 fix)
+        asyncio.create_task(self._process_datagram(data, addr))
+
+    async def _process_datagram(self, data: bytes, addr):
+        try:
+            response = await self.proxy.handle_dns_query(data, addr)
+            if response and self.transport and not self.transport.is_closing():
+                self.transport.sendto(response, addr)
+        except Exception:
+            pass

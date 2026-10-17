@@ -19,14 +19,27 @@ class ProcessMonitor:
         intelligence,
         database,
         dns_proxy,
+        firewall=None,
         event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-        poll_interval: float = 0.5
+        poll_interval: float = 0.5,
+        protection_mode: str = "MAX_PRIVACY"
     ):
         self.intelligence = intelligence
         self.database = database
         self.dns_proxy = dns_proxy
-        self.event_callback = event_callback
+
+        # Support both (firewall, event_callback) and legacy (event_callback) as 4th positional arg
+        if callable(firewall) and event_callback is None:
+            self.firewall = None
+            self.event_callback = firewall
+        else:
+            self.firewall = firewall
+            self.event_callback = event_callback
+
         self.poll_interval = poll_interval
+        self.protection_mode = protection_mode
+        self.shield_active = True
+        self.blocked_ips: Set[str] = set()
         
         self.is_running = False
         self.seen_connections: Set[Tuple[int, str, int, str, int]] = set()
@@ -34,6 +47,12 @@ class ProcessMonitor:
         self.rdns_cache: Dict[str, str] = {}
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
         self._warned_permissions = False
+
+    def set_shield_active(self, active: bool):
+        self.shield_active = active
+
+    def set_protection_mode(self, mode: str):
+        self.protection_mode = mode
 
     def resolve_rdns(self, ip: str) -> Optional[str]:
         if ip in self.rdns_cache:
@@ -95,7 +114,8 @@ class ProcessMonitor:
                 print("[ProcessMonitor] Tip: Run with sudo on Linux for complete kernel socket visibility.")
                 self._warned_permissions = True
             connections = []
-        except Exception:
+        except Exception as e:
+            print(f"[ProcessMonitor] Error fetching connections: {e}")
             connections = []
 
         current_active: Set[Tuple[int, str, int, str, int]] = set()
@@ -132,21 +152,64 @@ class ProcessMonitor:
             # 2. Reverse DNS
             domain = self.dns_proxy.get_domain_for_ip(remote_ip)
             if not domain:
-                domain = self.resolve_rdns(remote_ip) or remote_ip
+                resolved = await loop.run_in_executor(None, self.resolve_rdns, remote_ip)
+                domain = resolved or remote_ip
 
             # Classify threat
-            threat = self.intelligence.classify_connection(domain=domain, ip=remote_ip)
-            is_tracker = threat.get("is_tracker", False)
+            domain_threat = self.intelligence.inspect_domain(domain)
+            ip_threat = self.intelligence.inspect_ip(remote_ip)
+
+            is_tracker = bool(domain_threat.get("is_tracker", False) or ip_threat.get("is_tracker", False))
+
+            category = domain_threat.get("category")
+            if not category or category in ("Functional", "Unknown"):
+                category = ip_threat.get("category", category or "General")
+
+            company = domain_threat.get("company")
+            if not company or company == "Unknown":
+                company = ip_threat.get("company", "Unknown")
+
+            country = ip_threat.get("country")
+            if not country or country in ("Global", "Unknown"):
+                country = domain_threat.get("country", "US")
+
+            flag = ip_threat.get("flag")
+            if not flag or flag == "🌐":
+                flag = domain_threat.get("flag", "🌐")
+
+            threat = {
+                "is_tracker": is_tracker,
+                "category": category,
+                "company": company,
+                "risk": domain_threat.get("risk", "Low"),
+                "name": domain_threat.get("name") or ip_threat.get("company", "Unknown Tracker"),
+                "country": country,
+                "flag": flag,
+                "rule_matched": domain_threat.get("rule_matched", "")
+            }
 
             # Check app privacy policy in database
-            app_rule = self.database.get_app_rule(proc_name)
-            control_mode = app_rule.get("control_mode", "block_trackers") if app_rule else "block_trackers"
+            try:
+                control_mode = self.database.get_app_mode(exe_path, proc_name)
+            except TypeError:
+                control_mode = self.database.get_app_mode(proc_name)
+
+            if isinstance(control_mode, dict):
+                control_mode = control_mode.get("control_mode", "block_trackers")
+            if not control_mode:
+                control_mode = "block_trackers"
 
             # Determine final status
             status = "allowed"
             block_reason = None
 
-            if control_mode == "block_all":
+            if not self.shield_active:
+                status = "allowed"
+                block_reason = "Shield Disabled"
+            elif self.protection_mode in ("AUDIT", "AUDIT_ONLY"):
+                status = "allowed"
+                block_reason = "Audit Mode"
+            elif control_mode == "block_all":
                 status = "blocked"
                 block_reason = f"Application '{proc_name}' is set to Block All Outbound"
             elif control_mode == "allow_all":
@@ -161,6 +224,16 @@ class ProcessMonitor:
             elif control_mode == "audit":
                 status = "allowed"
                 block_reason = "Audit Mode"
+
+            # Enforce firewall blocking if tracker / blocked and shield is active
+            if status == "blocked" and self.shield_active:
+                if self.protection_mode in ("MAX_PRIVACY", "LOCKDOWN"):
+                    if self.firewall and remote_ip not in self.blocked_ips:
+                        try:
+                            self.firewall.block_ip(remote_ip)
+                        except Exception as e:
+                            print(f"[ProcessMonitor] Error blocking IP {remote_ip}: {e}")
+                        self.blocked_ips.add(remote_ip)
 
             # Assemble event
             event = {
@@ -194,9 +267,10 @@ class ProcessMonitor:
         self.is_running = True
         while self.is_running:
             try:
-                await self.scan_once()
+                if self.shield_active:
+                    await self.scan_once()
             except Exception as e:
-                pass
+                print(f"[ProcessMonitor] Error: {e}")
             await asyncio.sleep(self.poll_interval)
 
     def stop(self):

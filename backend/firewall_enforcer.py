@@ -12,7 +12,11 @@ Also neutralizes OS-level telemetry services:
 import subprocess
 import os
 import shutil
+import shlex
+import logging
 from typing import Dict, Any, List, Tuple, Optional
+
+logger = logging.getLogger("FirewallEnforcer")
 
 try:
     import winreg
@@ -25,6 +29,87 @@ class FirewallEnforcer:
     def __init__(self):
         self.rule_prefix = "TrackerControl_"
         self.backend = self._detect_firewall_backend()
+        self.is_elevated = self.check_elevation()
+        if not self.is_elevated:
+            logger.warning(
+                "TrackerControl is not running with administrative/root privileges! "
+                "Firewall rule enforcement and OS telemetry debloating may fail."
+            )
+            print(
+                "[FirewallEnforcer] WARNING: Running without administrative/root privileges! "
+                "Firewall enforcement and packet filtering will fail or be restricted."
+            )
+
+    @staticmethod
+    def check_elevation() -> bool:
+        """Returns True if running with admin / root privileges."""
+        if IS_WINDOWS:
+            try:
+                import ctypes
+                return bool(ctypes.windll.shell32.IsUserAnAdmin())
+            except Exception:
+                return False
+        elif IS_LINUX:
+            try:
+                return os.geteuid() == 0
+            except Exception:
+                return False
+        else:
+            try:
+                if hasattr(os, "geteuid"):
+                    return os.geteuid() == 0
+            except Exception:
+                pass
+        return False
+
+    def _ensure_nftables_table_and_chain(self) -> bool:
+        """Ensures that the trackercontrol table and output chain exist in nftables."""
+        table_ok, _ = self._run_cmd(["nft", "add", "table", "inet", "trackercontrol"])
+        chain_ok, _ = self._run_cmd(["nft", "add", "chain", "inet", "trackercontrol", "output", "{ type filter hook output priority 0; }"])
+        return table_ok and chain_ok
+
+    def _get_process_uid(self, exe_path: str, app_name: str) -> Optional[int]:
+        """Resolves the process owner UID for an application or executable."""
+        # 1. Try to find a running process with matching exe or name
+        try:
+            import psutil
+            app_lower = app_name.lower() if app_name else ""
+            exe_base = os.path.basename(exe_path).lower() if exe_path else ""
+            for p in psutil.process_iter(['name', 'exe', 'uids']):
+                try:
+                    info = p.info
+                    p_exe = info.get('exe') or ""
+                    p_name = info.get('name') or ""
+                    if (exe_base and os.path.basename(p_exe).lower() == exe_base) or \
+                       (app_lower and p_name.lower() == app_lower) or \
+                       (exe_path and os.path.abspath(p_exe) == os.path.abspath(exe_path)):
+                        uids = info.get('uids')
+                        if uids and hasattr(uids, 'real'):
+                            return int(uids.real)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+
+        # 2. Try file ownership if executable exists on disk
+        try:
+            if exe_path and os.path.exists(exe_path):
+                return int(os.stat(exe_path).st_uid)
+            if exe_path:
+                resolved = shutil.which(exe_path)
+                if resolved and os.path.exists(resolved):
+                    return int(os.stat(resolved).st_uid)
+        except Exception:
+            pass
+
+        # 3. Fallback to current process UID
+        try:
+            if hasattr(os, "getuid"):
+                return int(os.getuid())
+        except Exception:
+            pass
+
+        return None
 
     def _detect_firewall_backend(self) -> str:
         if IS_WINDOWS:
@@ -38,7 +123,7 @@ class FirewallEnforcer:
                 return "ufw"
             elif shutil.which("firewall-cmd"):
                 return "firewalld"
-        return "generic"
+        return "none"
 
     def _run_cmd(self, cmd: List[str]) -> Tuple[bool, str]:
         try:
@@ -74,25 +159,29 @@ class FirewallEnforcer:
             return {"success": success, "backend": "netsh", "rule_name": rule_name, "output": out}
 
         elif IS_LINUX:
-            proc_basename = os.path.basename(exe_path).split()[0]
-            # Try iptables with owner matching
-            if self.backend == "iptables" or shutil.which("iptables"):
+            proc_basename = os.path.basename(exe_path).split()[0] if exe_path else app_name
+
+            if self.backend == "nftables" or (not shutil.which("iptables") and shutil.which("nft")):
+                self._ensure_nftables_table_and_chain()
+                uid = self._get_process_uid(exe_path, app_name)
+                if uid is not None:
+                    cmd = ["nft", "add", "rule", "inet", "trackercontrol", "output", "meta", "skuid", str(uid), "ip", "daddr", "0.0.0.0/0", "drop"]
+                    success, out = self._run_cmd(cmd)
+                    return {"success": success, "backend": "nftables", "rule_name": rule_name, "output": out}
+                else:
+                    logger.warning(f"Could not determine process owner UID for {exe_path} ({app_name})")
+                    return {"success": False, "backend": "nftables", "rule_name": rule_name, "error": f"Could not determine UID for '{app_name}'"}
+
+            elif self.backend == "iptables" or shutil.which("iptables"):
                 # Clean existing rule if any
+                self._run_cmd(["iptables", "-D", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-m", "comment", "--comment", "TrackerControl", "-j", "DROP"])
                 self._run_cmd(["iptables", "-D", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-j", "DROP"])
-                cmd = ["iptables", "-I", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-m", "comment", "--comment", rule_name, "-j", "DROP"]
+                cmd = ["iptables", "-A", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-m", "comment", "--comment", "TrackerControl", "-j", "DROP"]
                 success, out = self._run_cmd(cmd)
                 return {"success": success, "backend": "iptables", "rule_name": rule_name, "output": out}
 
-            elif self.backend == "nftables":
-                # Ensure trackercontrol table exists
-                self._run_cmd(["nft", "add", "table", "inet", "trackercontrol"])
-                self._run_cmd(["nft", "add", "chain", "inet", "trackercontrol", "output", "{ type filter hook output priority 0; }"])
-                # Note: nftables process matching depends on cgroup/skuid
-                cmd = ["nft", "add", "rule", "inet", "trackercontrol", "output", "meta", "skuid", "drop"]
-                success, out = self._run_cmd(cmd)
-                return {"success": success, "backend": "nftables", "rule_name": rule_name, "output": out}
-
-        return {"success": True, "backend": "simulated", "rule_name": rule_name, "output": "Rule registered in software filter"}
+        logger.warning(f"No supported firewall backend found to block executable: {app_name}")
+        return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
     def unblock_executable(self, app_name: str) -> Dict[str, Any]:
         """Removes outbound firewall blocking for an application."""
@@ -103,12 +192,30 @@ class FirewallEnforcer:
             return {"success": success, "backend": "netsh", "rule_name": rule_name, "output": out}
 
         elif IS_LINUX:
-            proc_basename = os.path.basename(app_name).split()[0]
-            if shutil.which("iptables"):
+            proc_basename = os.path.basename(app_name).split()[0] if app_name else app_name
+
+            if self.backend == "nftables" or (not shutil.which("iptables") and shutil.which("nft")):
+                uid = self._get_process_uid("", app_name)
+                if uid is not None:
+                    success, out = self._run_cmd(["nft", "-a", "list", "chain", "inet", "trackercontrol", "output"])
+                    if success and out:
+                        for line in out.splitlines():
+                            if f"skuid {uid}" in line and "handle" in line:
+                                parts = line.strip().split()
+                                if "handle" in parts:
+                                    h_idx = parts.index("handle")
+                                    if h_idx + 1 < len(parts):
+                                        h_num = parts[h_idx + 1]
+                                        self._run_cmd(["nft", "delete", "rule", "inet", "trackercontrol", "output", "handle", h_num])
+                return {"success": True, "backend": "nftables", "rule_name": rule_name}
+
+            elif self.backend == "iptables" or shutil.which("iptables"):
+                self._run_cmd(["iptables", "-D", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-m", "comment", "--comment", "TrackerControl", "-j", "DROP"])
                 success, out = self._run_cmd(["iptables", "-D", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-j", "DROP"])
                 return {"success": success, "backend": "iptables", "output": out}
 
-        return {"success": True, "backend": "simulated"}
+        logger.warning(f"No supported firewall backend found to unblock executable: {app_name}")
+        return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
     # ==================== IP Address Blocking ====================
 
@@ -130,16 +237,25 @@ class FirewallEnforcer:
             return {"success": success, "backend": "netsh", "rule_name": rule_name, "output": out}
 
         elif IS_LINUX:
-            if shutil.which("iptables"):
+            if self.backend == "nftables" or (not shutil.which("iptables") and shutil.which("nft")):
+                self._ensure_nftables_table_and_chain()
+                cmd = ["nft", "add", "rule", "inet", "trackercontrol", "output", "ip", "daddr", ip_address, "drop"]
+                success, out = self._run_cmd(cmd)
+                return {"success": success, "backend": "nftables", "rule_name": rule_name, "output": out}
+
+            elif self.backend == "iptables" or shutil.which("iptables"):
+                self._run_cmd(["iptables", "-D", "OUTPUT", "-d", ip_address, "-m", "comment", "--comment", "TrackerControl_IP", "-j", "DROP"])
                 self._run_cmd(["iptables", "-D", "OUTPUT", "-d", ip_address, "-j", "DROP"])
-                cmd = ["iptables", "-I", "OUTPUT", "-d", ip_address, "-m", "comment", "--comment", rule_name, "-j", "DROP"]
+                cmd = ["iptables", "-A", "OUTPUT", "-d", ip_address, "-m", "comment", "--comment", "TrackerControl_IP", "-j", "DROP"]
                 success, out = self._run_cmd(cmd)
                 return {"success": success, "backend": "iptables", "rule_name": rule_name, "output": out}
-            elif shutil.which("ufw"):
+
+            elif self.backend == "ufw" or shutil.which("ufw"):
                 success, out = self._run_cmd(["ufw", "deny", "out", "to", ip_address])
                 return {"success": success, "backend": "ufw", "output": out}
 
-        return {"success": True, "backend": "simulated"}
+        logger.warning(f"No supported firewall backend found to block IP: {ip_address}")
+        return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
     def unblock_ip(self, ip_address: str) -> Dict[str, Any]:
         rule_name = f"{self.rule_prefix}IP_{ip_address.replace('.', '_')}"
@@ -148,14 +264,30 @@ class FirewallEnforcer:
             success, out = self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"])
             return {"success": success, "output": out}
         elif IS_LINUX:
-            if shutil.which("iptables"):
+            if self.backend == "nftables" or (not shutil.which("iptables") and shutil.which("nft")):
+                success, out = self._run_cmd(["nft", "-a", "list", "chain", "inet", "trackercontrol", "output"])
+                if success and out:
+                    for line in out.splitlines():
+                        if ip_address in line and "handle" in line:
+                            parts = line.strip().split()
+                            if "handle" in parts:
+                                h_idx = parts.index("handle")
+                                if h_idx + 1 < len(parts):
+                                    h_num = parts[h_idx + 1]
+                                    self._run_cmd(["nft", "delete", "rule", "inet", "trackercontrol", "output", "handle", h_num])
+                return {"success": True, "backend": "nftables", "output": "Rule removed"}
+
+            elif self.backend == "iptables" or shutil.which("iptables"):
+                self._run_cmd(["iptables", "-D", "OUTPUT", "-d", ip_address, "-m", "comment", "--comment", "TrackerControl_IP", "-j", "DROP"])
                 success, out = self._run_cmd(["iptables", "-D", "OUTPUT", "-d", ip_address, "-j", "DROP"])
                 return {"success": success, "output": out}
-            elif shutil.which("ufw"):
+
+            elif self.backend == "ufw" or shutil.which("ufw"):
                 success, out = self._run_cmd(["ufw", "delete", "deny", "out", "to", ip_address])
                 return {"success": success, "output": out}
 
-        return {"success": True}
+        logger.warning(f"No supported firewall backend found to unblock IP: {ip_address}")
+        return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
     # ==================== OS Privacy & Telemetry Debloater ====================
 
@@ -290,13 +422,44 @@ class FirewallEnforcer:
             return {"success": False, "error": str(e)}
 
     def flush_all_tc_rules(self) -> Dict[str, Any]:
+        """Flushes only rules created by TrackerControl without flushing or affecting other system firewall rules."""
         if IS_WINDOWS:
-            cmd = ["powershell", "-Command", f"Get-NetFirewallRule -Name '{self.rule_prefix}*' | Remove-NetFirewallRule"]
+            cmd = ["powershell", "-Command", f"Get-NetFirewallRule -DisplayName '{self.rule_prefix}*' | Remove-NetFirewallRule"]
             success, out = self._run_cmd(cmd)
             return {"success": success, "output": out}
         elif IS_LINUX:
+            flushed_count = 0
+            # 1. Clean up TrackerControl rules from iptables OUTPUT chain without flushing the system
             if shutil.which("iptables"):
-                # Clean up TrackerControl comments from OUTPUT chain
-                self._run_cmd(["iptables", "-F"])
-            return {"success": True, "output": "Flushed"}
-        return {"success": True}
+                success, out = self._run_cmd(["iptables", "-S", "OUTPUT"])
+                if success and out:
+                    for line in out.splitlines():
+                        if "TrackerControl" in line:
+                            tokens = shlex.split(line.strip())
+                            if tokens and tokens[0] == "-A" and len(tokens) >= 2:
+                                del_cmd = ["iptables", "-D"] + tokens[1:]
+                                del_ok, _ = self._run_cmd(del_cmd)
+                                if del_ok:
+                                    flushed_count += 1
+
+                # Secondary safety pass: check line numbers and delete any remaining TrackerControl rules in reverse order
+                success_l, out_l = self._run_cmd(["iptables", "-L", "OUTPUT", "--line-numbers", "-n"])
+                if success_l and out_l:
+                    matched_nums = []
+                    for line in out_l.splitlines():
+                        if "TrackerControl" in line:
+                            parts = line.strip().split()
+                            if parts and parts[0].isdigit():
+                                matched_nums.append(int(parts[0]))
+                    for num in sorted(matched_nums, reverse=True):
+                        del_ok, _ = self._run_cmd(["iptables", "-D", "OUTPUT", str(num)])
+                        if del_ok:
+                            flushed_count += 1
+
+            # 2. Clean up nftables trackercontrol table if present
+            if shutil.which("nft"):
+                self._run_cmd(["nft", "flush", "table", "inet", "trackercontrol"])
+                self._run_cmd(["nft", "delete", "table", "inet", "trackercontrol"])
+
+            return {"success": True, "output": f"Flushed TrackerControl rules ({flushed_count} iptables rules removed)"}
+        return {"success": True, "output": "No rules to flush"}

@@ -50,15 +50,25 @@ class TrackerEngine:
             intelligence=self.intelligence,
             database=self.database,
             dns_proxy=self.dns_proxy,
+            firewall=self.firewall,
             event_callback=self.on_event,
-            poll_interval=0.5
+            poll_interval=0.5,
+            protection_mode=self.protection_mode
         )
+        self.monitor = self.process_monitor
 
         self._dns_task = None
         self._monitor_task = None
 
     def on_event(self, event: Dict[str, Any]):
         """Called whenever DNS Proxy or Process Monitor records a network connection."""
+        if not self.shield_active:
+            event["status"] = "allowed"
+            event["block_reason"] = "Shield Disabled"
+        elif self.protection_mode in ("AUDIT", "AUDIT_ONLY"):
+            event["status"] = "allowed"
+            event["block_reason"] = "Audit Mode"
+
         self.recent_events_cache.insert(0, event)
         if len(self.recent_events_cache) > self.max_cache_size:
             self.recent_events_cache.pop()
@@ -102,12 +112,20 @@ class TrackerEngine:
         self.active_websockets.discard(websocket)
 
     def set_protection_mode(self, mode: str):
-        valid_modes = ["MAX_PRIVACY", "BALANCED", "AUDIT_ONLY", "LOCKDOWN"]
+        valid_modes = ["MAX_PRIVACY", "BALANCED", "AUDIT", "AUDIT_ONLY", "LOCKDOWN"]
         if mode in valid_modes:
             self.protection_mode = mode
+            if hasattr(self, "monitor") and self.monitor:
+                self.monitor.set_protection_mode(mode)
+            elif hasattr(self, "process_monitor") and self.process_monitor:
+                self.process_monitor.set_protection_mode(mode)
 
     def toggle_shield(self, active: bool):
         self.shield_active = active
+        if hasattr(self, "monitor") and self.monitor:
+            self.monitor.set_shield_active(active)
+        elif hasattr(self, "process_monitor") and self.process_monitor:
+            self.process_monitor.set_shield_active(active)
 
     def get_stats(self) -> Dict[str, Any]:
         stats = self.database.get_stats()
@@ -117,6 +135,15 @@ class TrackerEngine:
         stats["windows_privacy"] = self.firewall.get_windows_privacy_status()
         stats["system_summary"] = PlatformHelper.get_system_summary()
         return stats
+
+    def restore_dns(self):
+        """Restores original system DNS configuration."""
+        if hasattr(self, "dns_proxy") and self.dns_proxy:
+            self.dns_proxy.restore_system_dns()
+
+    def restore_system_dns(self):
+        """Restores original system DNS configuration."""
+        self.restore_dns()
 
     async def start(self):
         print(f"[Engine] Initializing TrackerControl PC Subsystems on {PlatformHelper.get_os_type()}...")
@@ -132,6 +159,9 @@ class TrackerEngine:
             self.dns_proxy.transport = transport
             self.dns_proxy.protocol = protocol
             print(f"[DNS] Listening on {self.dns_proxy.listen_host}:{self.dns_proxy.listen_port}")
+            # Automatically redirect OS DNS to local sinkhole if bound to port 53
+            if self.dns_proxy.listen_port == 53:
+                self.dns_proxy.configure_system_dns()
         except (PermissionError, OSError) as e:
             print(f"[DNS] Notice: Port {self.dns_proxy.listen_port} not directly bindable ({e}). Falling back to port 5353.")
             try:
@@ -144,6 +174,7 @@ class TrackerEngine:
                 self.dns_proxy.transport = transport
                 self.dns_proxy.protocol = protocol
                 print(f"[DNS] Listening on {self.dns_proxy.listen_host}:5353")
+                print("[DNS] Notice: Running on fallback port 5353. To intercept OS-wide DNS queries, run TrackerControl as Administrator / root so port 53 can bind.")
             except Exception as ex:
                 print(f"[DNS] Could not bind fallback DNS: {ex}")
         except Exception as e:
@@ -159,5 +190,15 @@ class TrackerEngine:
             self.process_monitor.stop()
         if self._monitor_task:
             self._monitor_task.cancel()
-        if self.dns_proxy.transport:
-            self.dns_proxy.transport.close()
+        if self.dns_proxy:
+            try:
+                self.dns_proxy.restore_system_dns()
+            except Exception as e:
+                print(f"[Engine] Notice during DNS restore: {e}")
+            if self.dns_proxy.transport:
+                self.dns_proxy.transport.close()
+        if self.firewall:
+            try:
+                self.firewall.flush_all_tc_rules()
+            except Exception as e:
+                print(f"[Engine] Notice during firewall cleanup: {e}")
