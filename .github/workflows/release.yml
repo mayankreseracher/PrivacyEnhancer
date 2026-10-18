@@ -40,7 +40,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TrackerControl-PC-Windows-x64
-          path: dist/TrackerControl-PC-Windows-x64.zip
+          path: |
+            dist/TrackerControl-PC.exe
+            dist/TrackerControl-PC-Windows-x64.zip
 
   build-linux:
     name: Build Linux Packages
@@ -134,10 +136,10 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
-            release-artifacts/TrackerControl-PC-Windows-x64/*
-            release-artifacts/TrackerControl-Linux-x86_64/*
-            release-artifacts/TrackerControl-macOS-Universal/*
+            release-artifacts/**/*
+          name: "TrackerControl PC ${{ github.ref_name }} — Sovereign Edition"
           draft: false
           prerelease: false
           generate_release_notes: true
