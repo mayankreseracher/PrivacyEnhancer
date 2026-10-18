@@ -29,25 +29,26 @@ TrackerControl on Android popularized per-app tracker visibility and blocking us
 * 🔀 **Multi-VPN Port Forwarding & Relay Engine**: Bidirectional **TCP & UDP** socket forwarder, custom tunnel interface binding (`tunnel_id`: Proton WireGuard, Custom WireGuard, Orbot/Tor, or Global), and hardware acceleration via Windows Netsh PortProxy and Linux iptables DNAT.
 * ⚡ **Proton VPN Dynamic NAT-PMP Engine (RFC 6886)**: Dynamic P2P port forward allocation directly via Proton WireGuard gateway (`10.2.0.1:5351` via UDP), automated lease renewal loop, and instant one-click copy for BitTorrent (qBittorrent, Deluge), seeding, and game hosting.
 * 🧅 **Built-in Orbot / Tor Gateway**: SOCKS5 and HTTP proxy routing with ControlPort `SIGNAL NEWNYM` circuit cycling.
+* 🚀 **Cross-Platform Auto-Update Engine**: Native updater checking GitHub Releases API, streaming downloads with real-time speedometers and progress tracking, and non-blocking detached self-replacement and restart on Windows, macOS, and Linux.
 
 ---
 
 ## 📦 Official App Releases & Direct Downloads
 
-Official pre-built desktop releases with bundled Python runtime, threat database, and assets are available on the [**Official GitHub Releases Page (v1.0.4)**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/tag/v1.0.4) or in [`dist/`](dist/):
+Official pre-built desktop releases with bundled Python runtime, threat database, and assets are available on the [**Official GitHub Releases Page (v1.0.5)**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/tag/v1.0.5) or in [`dist/`](dist/):
 
 | OS / Distribution | Package Type | Direct Download Link | Description |
 |---|---|---|---|
-| **Windows 10 / 11** | Standalone Executable | [**`TrackerControl-PC.exe`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/TrackerControl-PC.exe) | Single-file portable executable (17.4 MB) |
-| **Windows 10 / 11** | Release ZIP | [**`TrackerControl-PC-Windows-x64.zip`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/TrackerControl-PC-Windows-x64.zip) | Portable bundle with batch launcher (17.2 MB) |
-| **macOS (Apple Silicon & Intel)** | Native Disk Image (.dmg) | [**`TrackerControl-v1.0.0-macOS.dmg`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/TrackerControl-v1.0.0-macOS.dmg) | Drag-and-drop macOS installer image |
-| **macOS (Apple Silicon & Intel)** | App Bundle Archive | [**`TrackerControl-v1.0.0-macOS-universal.tar.gz`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/TrackerControl-v1.0.0-macOS-universal.tar.gz) | Standalone `.app` bundle with launcher script |
-| **macOS (Apple Silicon & Intel)** | Universal Release ZIP | [**`TrackerControl-v1.0.0-macOS-universal.zip`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/TrackerControl-v1.0.0-macOS-universal.zip) | Complete `.app` bundle with `install_mac.sh` |
+| **Windows 10 / 11** | Standalone Executable | [**`TrackerControl-PC.exe`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/TrackerControl-PC.exe) | Single-file portable executable (17.4 MB) |
+| **Windows 10 / 11** | Release ZIP | [**`TrackerControl-PC-Windows-x64.zip`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/TrackerControl-PC-Windows-x64.zip) | Portable bundle with batch launcher (17.2 MB) |
+| **macOS (Apple Silicon & Intel)** | Native Disk Image (.dmg) | [**`TrackerControl-v1.0.0-macOS.dmg`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/TrackerControl-v1.0.0-macOS.dmg) | Drag-and-drop macOS installer image |
+| **macOS (Apple Silicon & Intel)** | App Bundle Archive | [**`TrackerControl-v1.0.0-macOS-universal.tar.gz`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/TrackerControl-v1.0.0-macOS-universal.tar.gz) | Standalone `.app` bundle with launcher script |
+| **macOS (Apple Silicon & Intel)** | Universal Release ZIP | [**`TrackerControl-v1.0.0-macOS-universal.zip`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/TrackerControl-v1.0.0-macOS-universal.zip) | Complete `.app` bundle with `install_mac.sh` |
 | **macOS (Homebrew)** | Homebrew Cask | [`packaging/macos/trackercontrol.rb`](packaging/macos/trackercontrol.rb) | `brew install --cask trackercontrol.rb` |
-| **Debian / Ubuntu / Mint** | Native `.deb` | [**`trackercontrol_1.0.0_amd64.deb`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/trackercontrol_1.0.0_amd64.deb) | Native Debian package with systemd & desktop integration (30.1 MB) |
-| **Fedora / RHEL / openSUSE** | Native `.rpm` | [**`trackercontrol-1.0.0-1.x86_64.rpm`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/trackercontrol-1.0.0-1.x86_64.rpm) | Native RPM package with systemd & desktop integration (30.2 MB) |
-| **Universal Linux** | Standalone Binary | [**`trackercontrol-linux`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/trackercontrol-linux) | Native 64-bit ELF standalone executable (30.4 MB) |
-| **Universal Linux** | Portable Tarball | [**`trackercontrol-v1.0.0-linux-x86_64.tar.gz`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.4/trackercontrol-v1.0.0-linux-x86_64.tar.gz) | Complete bundle with `install.sh` and `uninstall.sh` (30.2 MB) |
+| **Debian / Ubuntu / Mint** | Native `.deb` | [**`trackercontrol_1.0.0_amd64.deb`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/trackercontrol_1.0.0_amd64.deb) | Native Debian package with systemd & desktop integration (30.1 MB) |
+| **Fedora / RHEL / openSUSE** | Native `.rpm` | [**`trackercontrol-1.0.0-1.x86_64.rpm`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/trackercontrol-1.0.0-1.x86_64.rpm) | Native RPM package with systemd & desktop integration (30.2 MB) |
+| **Universal Linux** | Standalone Binary | [**`trackercontrol-linux`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/trackercontrol-linux) | Native 64-bit ELF standalone executable (30.4 MB) |
+| **Universal Linux** | Portable Tarball | [**`trackercontrol-v1.0.0-linux-x86_64.tar.gz`**](https://github.com/mayankreseracher/PrivacyEnhancer/releases/download/v1.0.5/trackercontrol-v1.0.0-linux-x86_64.tar.gz) | Complete bundle with `install.sh` and `uninstall.sh` (30.2 MB) |
 | **Arch Linux / Manjaro** | PKGBUILD | [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) | AUR / Arch build recipe |
 | **Fedora / RHEL / openSUSE** | RPM Spec | [`packaging/rpm/trackercontrol.spec`](packaging/rpm/trackercontrol.spec) | RPM packaging specification |
 

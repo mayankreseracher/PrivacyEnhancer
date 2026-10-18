@@ -61,13 +61,19 @@ class UDPForwarderProtocol(asyncio.DatagramProtocol):
         self.server_transport = None
         self.clients: Dict[Tuple[str, int], asyncio.DatagramTransport] = {}
         self.last_seen: Dict[Tuple[str, int], float] = {}
+        self._last_cleanup: float = time.time()
 
     def connection_made(self, transport):
         self.server_transport = transport
 
     def datagram_received(self, data: bytes, client_addr: Tuple[str, int]):
-        self.last_seen[client_addr] = time.time()
+        now = time.time()
+        self.last_seen[client_addr] = now
         self.record_traffic(len(data))
+
+        # Periodic cleanup of idle UDP client transports to prevent socket descriptor leaks
+        if now - self._last_cleanup > 30.0:
+            self.purge_stale_clients(timeout_seconds=60.0)
 
         outbound = self.clients.get(client_addr)
         if outbound and not outbound.is_closing():
@@ -101,6 +107,20 @@ class UDPForwarderProtocol(asyncio.DatagramProtocol):
     def remove_client(self, client_addr: Tuple[str, int]):
         self.clients.pop(client_addr, None)
         self.last_seen.pop(client_addr, None)
+
+    def purge_stale_clients(self, timeout_seconds: float = 60.0):
+        """Purges and closes UDP client transport endpoints that have been idle."""
+        now = time.time()
+        self._last_cleanup = now
+        stale_addrs = [addr for addr, ts in self.last_seen.items() if now - ts > timeout_seconds]
+        for addr in stale_addrs:
+            transport = self.clients.pop(addr, None)
+            self.last_seen.pop(addr, None)
+            if transport and not transport.is_closing():
+                try:
+                    transport.close()
+                except Exception:
+                    pass
 
     def close(self):
         for transport in list(self.clients.values()):

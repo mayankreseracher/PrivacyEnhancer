@@ -45,6 +45,78 @@ KNOWN_IP_RANGES = [
     (re.compile(r"^(23\.|104\.([0-9]|1[0-5])\.|184\.|92\.122\.|92\.123\.)"), "Akamai Technologies", "US", "🇺🇸"),
 ]
 
+# Whitelisted functional root domains and infrastructure providers.
+# These must NEVER be classified as trackers or matched via parent domain wildcards.
+EXEMPT_FUNCTIONAL_ROOT_DOMAINS = {
+    "google.com",
+    "google.co.in",
+    "google.co.uk",
+    "google.com.au",
+    "google.ca",
+    "google.de",
+    "google.fr",
+    "google.co.jp",
+    "amazon.com",
+    "amazon.in",
+    "amazon.co.uk",
+    "amazon.de",
+    "cloudflare.com",
+    "microsoft.com",
+    "apple.com",
+    "github.com",
+    "githubusercontent.com",
+    "windows.com",
+    "live.com",
+    "office.com",
+    "office365.com",
+    "azure.com",
+    "netflix.com",
+    "spotify.com",
+    "wikipedia.org",
+    "yahoo.com",
+    "bing.com",
+    "zendesk.com",
+    "vimeo.com",
+    "unpkg.com",
+    "jsdelivr.net",
+    "fastly.net",
+    "akamai.net",
+    "akamaitechnologies.com"
+}
+
+# Critical productivity and functional services that should never be blocked
+EXEMPT_FUNCTIONAL_DOMAINS = {
+    "docs.google.com",
+    "drive.google.com",
+    "mail.google.com",
+    "calendar.google.com",
+    "meet.google.com",
+    "accounts.google.com",
+    "apis.google.com",
+    "play.google.com",
+    "cloud.google.com",
+    "console.cloud.google.com",
+    "clients1.google.com",
+    "clients2.google.com",
+    "clients3.google.com",
+    "clients4.google.com",
+    "aws.amazon.com",
+    "console.aws.amazon.com",
+    "s3.amazonaws.com",
+    "api.cloudflare.com",
+    "dash.cloudflare.com",
+    "portal.azure.com",
+    "login.microsoftonline.com",
+    "outlook.office.com",
+    "outlook.live.com",
+    "teams.microsoft.com",
+    "login.live.com",
+    "raw.githubusercontent.com",
+    "api.github.com",
+    "registry.npmjs.org",
+    "pypi.org"
+}
+
 class TrackerIntelligence:
     def __init__(self):
         self.trackers_map: Dict[str, Dict[str, Any]] = {}
@@ -58,7 +130,7 @@ class TrackerIntelligence:
                     trackers = json.load(f)
                     for t in trackers:
                         domain = t.get("domain", "").lower().strip()
-                        if domain:
+                        if domain and domain not in EXEMPT_FUNCTIONAL_ROOT_DOMAINS:
                             self.trackers_map[domain] = t
                 print(f"[Intelligence] Loaded {len(self.trackers_map)} tracker signatures in memory.")
             except Exception as e:
@@ -80,8 +152,22 @@ class TrackerIntelligence:
 
         domain = domain.lower().strip().rstrip(".")
 
+        # 0. Immediate Whitelist Exemption for critical functional services & root domains
+        if domain in EXEMPT_FUNCTIONAL_DOMAINS or domain in EXEMPT_FUNCTIONAL_ROOT_DOMAINS:
+            company = self._resolve_functional_company(domain)
+            return {
+                "is_tracker": False,
+                "category": "Functional",
+                "name": domain,
+                "company": company,
+                "risk": "Clean",
+                "rule_matched": "Functional Whitelist Exemption",
+                "country": "US",
+                "flag": "🇺🇸"
+            }
+
         # 1. Exact match in database
-        if domain in self.trackers_map:
+        if domain in self.trackers_map and domain not in EXEMPT_FUNCTIONAL_ROOT_DOMAINS:
             t = self.trackers_map[domain]
             return {
                 "is_tracker": True,
@@ -94,10 +180,13 @@ class TrackerIntelligence:
                 "flag": "🇺🇸"
             }
 
-        # 2. Suffix / Parent domain match (e.g. 'ads.google.com' -> 'google.com' or 'adservice.google.com')
+        # 2. Suffix / Parent domain match (e.g. 'ads.google.com' -> 'adservice.google.com')
         parts = domain.split(".")
         for i in range(1, len(parts) - 1):
             parent = ".".join(parts[i:])
+            # NEVER allow parent match on generic infrastructure/company root domains
+            if parent in EXEMPT_FUNCTIONAL_ROOT_DOMAINS:
+                continue
             if parent in self.trackers_map:
                 t = self.trackers_map[parent]
                 return {
@@ -235,3 +324,24 @@ class TrackerIntelligence:
             "country": "Global",
             "flag": "🌐"
         }
+
+    def _resolve_functional_company(self, domain: str) -> str:
+        d = domain.lower()
+        if "google" in d:
+            return "Alphabet Inc."
+        if "amazon" in d or "aws" in d:
+            return "Amazon.com Inc."
+        if "microsoft" in d or "windows" in d or "live.com" in d or "office" in d or "azure" in d:
+            return "Microsoft Corporation"
+        if "cloudflare" in d:
+            return "Cloudflare Inc."
+        if "apple" in d:
+            return "Apple Inc."
+        if "github" in d:
+            return "Microsoft (GitHub)"
+        if "spotify" in d:
+            return "Spotify AB"
+        if "netflix" in d:
+            return "Netflix Inc."
+        return "Clean / Functional Provider"
+

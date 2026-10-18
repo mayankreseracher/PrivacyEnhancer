@@ -64,6 +64,24 @@ const state = {
     blocked_trackers: 0,
     monitored_apps: 0,
     top_companies: []
+  },
+  updater: {
+    status: "idle",
+    current_version: "1.0.5",
+    latest_version: null,
+    update_available: false,
+    release_name: "",
+    release_notes: "",
+    html_url: "https://github.com/mayankreseracher/PrivacyEnhancer/releases",
+    published_at: "",
+    asset_name: "",
+    asset_size: 0,
+    download_progress: 0,
+    download_speed_kbps: 0,
+    downloaded_bytes: 0,
+    total_bytes: 0,
+    auto_check_enabled: true,
+    error_message: null
   }
 };
 
@@ -160,8 +178,8 @@ function getCandidateWsUrls() {
   if (!isFile && window.location.host) {
     urls.push(`${wsProto}//${window.location.host}/ws`);
   }
-  urls.push("ws://127.0.0.1:8000/ws");
-  urls.push("ws://localhost:8000/ws");
+  urls.push(`${wsProto}//127.0.0.1:8000/ws`);
+  urls.push(`${wsProto}//localhost:8000/ws`);
   return [...new Set(urls)];
 }
 
@@ -218,12 +236,39 @@ function initWebSocket() {
           updateAlertsBadge();
           renderAlertsFeed();
         }
+        if (msg.data.shield_active !== undefined) {
+          const masterToggle = document.getElementById("masterShieldToggle");
+          if (masterToggle) masterToggle.checked = !!msg.data.shield_active;
+        }
+        if (msg.data.protection_mode) {
+          const modeSelect = document.getElementById("shieldModeSelect");
+          if (modeSelect) modeSelect.value = msg.data.protection_mode;
+        }
+        if (msg.data.system_summary && msg.data.system_summary.os) {
+          const hostBadge = document.getElementById("hostOsBadge");
+          if (hostBadge) {
+            const os = msg.data.system_summary.os.toLowerCase();
+            const osIcons = { windows: "🪟 Windows", linux: "🐧 Linux", darwin: "🍎 macOS" };
+            hostBadge.textContent = osIcons[os] || `🖥️ ${msg.data.system_summary.os}`;
+          }
+        }
+        if (msg.data.updater) {
+          updateUpdaterState(msg.data.updater);
+        }
       } else if (msg.type === "NEW_CONNECTION") {
         handleNewConnection(msg.data);
       } else if (msg.type === "BANDWIDTH_TICK") {
         handleBandwidthTick(msg.data);
       } else if (msg.type === "SECURITY_ALERT") {
         handleSecurityAlert(msg.data);
+      } else if (msg.type === "UPDATE_AVAILABLE") {
+        handleUpdateAvailable(msg.data);
+      } else if (msg.type === "UPDATE_PROGRESS") {
+        handleUpdateProgress(msg.data);
+      } else if (msg.type === "UPDATE_READY") {
+        handleUpdateReady(msg.data);
+      } else if (msg.type === "UPDATE_STATUS") {
+        handleUpdateStatus(msg.data);
       }
     } catch (err) {
       console.error("WS Parse error:", err);
@@ -285,6 +330,8 @@ async function bootstrapInitialState() {
         updateSpeedometers(state.bandwidthHistory[state.bandwidthHistory.length - 1]);
       }
     }
+
+    loadUpdaterStatus();
   } catch (err) {
     console.warn("Bootstrap initial state fetch error:", err);
   }
@@ -703,13 +750,14 @@ function initNetworkGraph() {
 function matchesFilter(conn) {
   const query = state.searchQuery.toLowerCase();
   if (query) {
-    const searchable = `${conn.process_name} ${conn.domain} ${conn.company} ${conn.category}`.toLowerCase();
+    const searchable = `${conn.process_name || ""} ${conn.domain || ""} ${conn.company || ""} ${conn.category || ""}`.toLowerCase();
     if (!searchable.includes(query)) return false;
   }
 
+  const cat = conn.category || "";
   if (state.filter === "blocked") return conn.status === "blocked";
-  if (state.filter === "trackers") return conn.category !== "Functional" && conn.category !== "Infrastructure";
-  if (state.filter === "telemetry") return conn.category.includes("Telemetry") || conn.category.includes("Windows");
+  if (state.filter === "trackers") return cat !== "Functional" && cat !== "Infrastructure";
+  if (state.filter === "telemetry") return cat.includes("Telemetry") || cat.includes("Windows");
 
   return true;
 }
@@ -1699,7 +1747,7 @@ window.toggleMasterVpn = async function() {
         const deployRes = await fetch(`${API_BASE}/api/vpn/proton/deploy`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ server_id: "NL-FREE#1", custom_name: "Proton Netherlands (Fastest Free)" })
+          body: JSON.stringify({ server_id: "nl-free-01", custom_name: "Proton Netherlands (Fastest Free)" })
         });
         const dData = await deployRes.json();
         if (dData.tunnel && dData.tunnel.id) {
@@ -1910,10 +1958,9 @@ async function toggleTunnel(tunnelId, activate) {
 }
 
 async function deleteTunnel(tunnelId) {
-  if (!confirm("Are you sure you want to remove this WireGuard tunnel?")) return;
   try {
     await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(tunnelId)}`, { method: "DELETE" });
-    showToast("Tunnel Removed", "WireGuard tunnel removed.", "info");
+    showToast("Tunnel Removed", "WireGuard tunnel removed successfully.", "info");
     loadVpnState();
   } catch (err) {
     showToast("VPN Error", "Error deleting tunnel: " + err, "error");
@@ -2309,3 +2356,331 @@ async function deletePortForward(ruleId) {
     showToast("Port Forward Error", "Error deleting port forward rule: " + err, "error");
   }
 }
+
+// ==================== Auto-Updater Frontend Subsystem ====================
+
+function updateUpdaterState(data) {
+  if (!data) return;
+  state.updater = Object.assign({}, state.updater, data);
+  renderUpdaterUI(state.updater);
+}
+
+function renderUpdaterUI(data) {
+  if (!data) return;
+
+  const currentVer = data.current_version || "1.0.5";
+  const latestVer = data.latest_version || currentVer;
+  const isAvailable = !!data.update_available;
+  const status = data.status || "idle";
+
+  // 1. Top Navbar Header Pill
+  const pillText = document.getElementById("updatePillText");
+  const pillDot = document.getElementById("updatePillDot");
+  if (pillText) {
+    pillText.textContent = isAvailable ? `Update: v${latestVer}` : `v${currentVer}`;
+  }
+  if (pillDot) {
+    pillDot.className = "update-pill-dot" + 
+      (status === "ready" ? " ready" : (isAvailable ? " available" : ""));
+  }
+
+  // 2. Modal Hero Card Versions
+  const curVerElem = document.getElementById("updateCurrentVersion");
+  const latVerElem = document.getElementById("updateLatestVersion");
+  if (curVerElem) curVerElem.textContent = `v${currentVer}`;
+  if (latVerElem) {
+    if (status === "checking") {
+      latVerElem.textContent = "Scanning...";
+    } else if (isAvailable && data.latest_version) {
+      latVerElem.textContent = `v${latestVer}`;
+    } else {
+      latVerElem.textContent = `v${latestVer} (Up to date)`;
+    }
+  }
+
+  // 3. Status Badge Pill
+  const statusPill = document.getElementById("updateStatusPill");
+  if (statusPill) {
+    if (status === "checking") {
+      statusPill.className = "badge badge-functional";
+      statusPill.innerHTML = "🔄 Checking GitHub Releases...";
+    } else if (status === "downloading") {
+      statusPill.className = "badge badge-ad";
+      statusPill.innerHTML = `⬇️ Downloading Update (${Math.round(data.download_progress || 0)}%)`;
+    } else if (status === "ready") {
+      statusPill.className = "badge badge-allowed";
+      statusPill.style.background = "rgba(0, 255, 157, 0.2)";
+      statusPill.style.color = "#00ff9d";
+      statusPill.innerHTML = "⚡ Update Downloaded & Ready to Install";
+    } else if (status === "applying") {
+      statusPill.className = "badge badge-telemetry";
+      statusPill.innerHTML = "🔄 Applying Update & Restarting...";
+    } else if (isAvailable) {
+      statusPill.className = "badge badge-telemetry";
+      statusPill.style.background = "rgba(0, 229, 255, 0.2)";
+      statusPill.style.color = "var(--accent-cyan)";
+      statusPill.innerHTML = `🚀 New Version Available: v${latestVer}`;
+    } else if (status === "error") {
+      statusPill.className = "badge badge-blocked";
+      statusPill.innerHTML = `❌ ${escapeHtml(data.error_message || "Update check failed")}`;
+    } else {
+      statusPill.className = "badge badge-allowed";
+      statusPill.style.background = "";
+      statusPill.style.color = "";
+      statusPill.innerHTML = "✅ TrackerControl PC is Up to Date";
+    }
+  }
+
+  // 4. Release Notes & Package Info
+  const releaseMeta = document.getElementById("updateReleaseMeta");
+  if (releaseMeta) {
+    if (isAvailable && data.latest_version) {
+      releaseMeta.style.display = "block";
+      const title = document.getElementById("updateReleaseTitle");
+      if (title) title.textContent = data.release_name || `TrackerControl PC v${latestVer} Release`;
+
+      const dateElem = document.getElementById("updateReleaseDate");
+      if (dateElem) {
+        dateElem.textContent = data.published_at 
+          ? `Published: ${new Date(data.published_at).toLocaleDateString()}`
+          : "Published: Recently";
+      }
+
+      const changelog = document.getElementById("updateChangelog");
+      if (changelog) {
+        changelog.textContent = data.release_notes || "Includes updated threat signatures, high-performance VPN routing, and bug fixes.";
+      }
+
+      const assetName = document.getElementById("updateAssetName");
+      const assetSize = document.getElementById("updateAssetSize");
+      const asset = data.selected_asset;
+      if (assetName) assetName.textContent = (asset && asset.name) || data.asset_name || "Platform binary";
+      if (assetSize) {
+        const bytes = (asset && asset.size) || data.total_bytes || data.asset_size || 0;
+        assetSize.textContent = bytes > 0 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : "Auto-detect";
+      }
+    } else {
+      releaseMeta.style.display = "none";
+    }
+  }
+
+  // 5. Download Progress Bar
+  const progressBox = document.getElementById("updateProgressContainer");
+  if (progressBox) {
+    if (status === "downloading" || status === "ready") {
+      progressBox.style.display = "block";
+      const fill = document.getElementById("updateProgressFill");
+      const pct = document.getElementById("updateProgressPercent");
+      const txt = document.getElementById("updateProgressText");
+      const speed = document.getElementById("updateSpeedText");
+      const bytes = document.getElementById("updateBytesText");
+
+      const prog = status === "ready" ? 100 : Math.min(100, Math.max(0, data.download_progress || 0));
+      if (fill) fill.style.width = `${prog}%`;
+      if (pct) pct.textContent = `${Math.round(prog)}%`;
+      if (txt) {
+        txt.textContent = status === "ready" 
+          ? "Download Complete! Ready for immediate installation." 
+          : "Streaming update package directly from GitHub...";
+      }
+      if (speed) speed.textContent = `${data.download_speed_kbps || 0} KB/s`;
+      if (bytes) {
+        const dlMb = ((data.downloaded_bytes || 0) / (1024 * 1024)).toFixed(1);
+        const totMb = ((data.total_bytes || 0) / (1024 * 1024)).toFixed(1);
+        bytes.textContent = `${dlMb} MB / ${totMb} MB`;
+      }
+    } else {
+      progressBox.style.display = "none";
+    }
+  }
+
+  // 6. Action Buttons & Controls
+  const checkBtn = document.getElementById("updateCheckBtn");
+  const checkIcon = document.getElementById("updateCheckIcon");
+  if (checkBtn) checkBtn.disabled = (status === "checking" || status === "downloading" || status === "applying");
+  if (checkIcon) checkIcon.textContent = status === "checking" ? "⏳" : "🔄";
+
+  const downloadBtn = document.getElementById("updateDownloadBtn");
+  if (downloadBtn) {
+    downloadBtn.style.display = (isAvailable && status !== "downloading" && status !== "ready" && status !== "applying") 
+      ? "inline-flex" 
+      : "none";
+  }
+
+  const applyBtn = document.getElementById("updateApplyBtn");
+  if (applyBtn) {
+    applyBtn.style.display = (status === "ready") ? "inline-flex" : "none";
+  }
+
+  const ghLink = document.getElementById("updateGithubLink");
+  if (ghLink && data.html_url) {
+    ghLink.href = data.html_url;
+  }
+
+  const autoToggle = document.getElementById("updaterAutoCheckToggle");
+  if (autoToggle && data.auto_check_enabled !== undefined) {
+    autoToggle.checked = !!data.auto_check_enabled;
+  }
+}
+
+async function openUpdateModal() {
+  const modal = document.getElementById("updateModal");
+  if (modal) modal.classList.add("open");
+  await loadUpdaterStatus();
+}
+
+function closeUpdateModal() {
+  const modal = document.getElementById("updateModal");
+  if (modal) modal.classList.remove("open");
+}
+
+async function loadUpdaterStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/api/updater/status`);
+    if (res.ok) {
+      const data = await res.json();
+      updateUpdaterState(data);
+    }
+  } catch (err) {
+    console.warn("Failed fetching updater status:", err);
+  }
+}
+
+async function checkUpdates(manual = false) {
+  state.updater.status = "checking";
+  renderUpdaterUI(state.updater);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/updater/check`, { method: "POST" });
+    const data = await res.json();
+    updateUpdaterState(data);
+
+    if (data.update_available) {
+      showToast("Update Available", `TrackerControl PC v${data.latest_version} is available!`, "info");
+    } else if (manual) {
+      showToast("Up to Date", `TrackerControl PC is running the latest version (v${data.current_version || "1.0.5"}).`, "success");
+    }
+  } catch (err) {
+    state.updater.status = "error";
+    state.updater.error_message = String(err);
+    renderUpdaterUI(state.updater);
+    showToast("Update Error", "Failed to connect to update service: " + err, "error");
+  }
+}
+
+async function downloadUpdate() {
+  try {
+    showToast("Download Initiated", "Streaming update package from GitHub Releases in background...", "info");
+    state.updater.status = "downloading";
+    state.updater.download_progress = 0;
+    renderUpdaterUI(state.updater);
+
+    const res = await fetch(`${API_BASE}/api/updater/download`, { method: "POST" });
+    const data = await res.json();
+    if (!data.success && data.error) {
+      showToast("Download Failed", data.error, "error");
+      state.updater.status = "error";
+      state.updater.error_message = data.error;
+      renderUpdaterUI(state.updater);
+    }
+  } catch (err) {
+    showToast("Download Error", "Error starting update download: " + err, "error");
+  }
+}
+
+async function applyUpdate() {
+  try {
+    showToast("Applying Update", "Executing updater script and restarting TrackerControl PC...", "success");
+    state.updater.status = "applying";
+    renderUpdaterUI(state.updater);
+
+    const res = await fetch(`${API_BASE}/api/updater/apply`, { method: "POST" });
+    const data = await res.json();
+    if (!data.success && data.error) {
+      showToast("Update Failed", data.error, "error");
+      state.updater.status = "error";
+      state.updater.error_message = data.error;
+      renderUpdaterUI(state.updater);
+    }
+  } catch (err) {
+    showToast("Update Error", "Error applying update: " + err, "error");
+  }
+}
+
+async function toggleAutoCheckUpdates(enabled) {
+  try {
+    await fetch(`${API_BASE}/api/updater/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_check: enabled })
+    });
+    showToast("Settings Updated", `Automatic background update checks ${enabled ? "enabled" : "disabled"}.`, "info");
+  } catch (err) {
+    showToast("Settings Error", "Error saving updater settings: " + err, "error");
+  }
+}
+
+function handleUpdateAvailable(data) {
+  updateUpdaterState(data);
+  showToast(
+    "Update Available",
+    `TrackerControl PC v${data.latest_version || "New"} is available! Click the version badge in the top bar to inspect changelog and download.`,
+    "info",
+    8000
+  );
+}
+
+function handleUpdateProgress(data) {
+  if (data.progress !== undefined) state.updater.download_progress = data.progress;
+  if (data.speed_kbps !== undefined) state.updater.download_speed_kbps = data.speed_kbps;
+  if (data.downloaded_bytes !== undefined) state.updater.downloaded_bytes = data.downloaded_bytes;
+  if (data.total_bytes !== undefined) state.updater.total_bytes = data.total_bytes;
+  state.updater.status = "downloading";
+  renderUpdaterUI(state.updater);
+}
+
+function handleUpdateReady(data) {
+  updateUpdaterState(data);
+  state.updater.status = "ready";
+  renderUpdaterUI(state.updater);
+  showToast(
+    "Update Ready to Install",
+    "TrackerControl PC update has finished downloading. Click '⚡ Install & Restart' to complete.",
+    "success",
+    10000
+  );
+}
+
+function handleUpdateStatus(data) {
+  updateUpdaterState(data);
+}
+
+// Global modal click outside listener
+document.addEventListener("DOMContentLoaded", () => {
+  const updateModal = document.getElementById("updateModal");
+  if (updateModal) {
+    updateModal.addEventListener("click", (e) => {
+      if (e.target === updateModal) {
+        closeUpdateModal();
+      }
+    });
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    const updateModal = document.getElementById("updateModal");
+    if (updateModal && updateModal.classList.contains("open")) {
+      closeUpdateModal();
+    }
+  }
+});
+
+// Window exports
+window.openUpdateModal = openUpdateModal;
+window.closeUpdateModal = closeUpdateModal;
+window.checkUpdates = checkUpdates;
+window.downloadUpdate = downloadUpdate;
+window.applyUpdate = applyUpdate;
+window.toggleAutoCheckUpdates = toggleAutoCheckUpdates;
+

@@ -264,3 +264,23 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM custom_rules WHERE id = ?", (rule_id,))
             conn.commit()
+
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Retrieves a configuration setting value by key."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if row:
+                return row["value"]
+            return default
+
+    def set_setting(self, key: str, value: str):
+        """Sets or updates a configuration setting value."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (key, str(value)))
+            conn.commit()

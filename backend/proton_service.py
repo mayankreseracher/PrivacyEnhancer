@@ -232,7 +232,8 @@ class ProtonService:
 
     def generate_wireguard_config(self, server_id: str, custom_private_key: Optional[str] = None, custom_address: Optional[str] = None) -> Dict[str, Any]:
         """Generates a complete WireGuard .conf content for a given Proton server."""
-        server = next((s for s in VERIFIED_PROTON_SERVERS if s["id"] == server_id), None)
+        sid = (server_id or "").strip().lower()
+        server = next((s for s in VERIFIED_PROTON_SERVERS if s["id"].lower() == sid or s["name"].lower() == sid), None)
         if not server:
             raise ValueError(f"Proton server with ID '{server_id}' not found.")
 

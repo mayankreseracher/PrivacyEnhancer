@@ -9597,13 +9597,6 @@
     "risk": "Medium"
   },
   {
-    "domain": "amazon.com",
-    "name": "Amazon Resource",
-    "company": "Amazon",
-    "category": "Analytics",
-    "risk": "Medium"
-  },
-  {
     "domain": "amazon.de",
     "name": "Amazon Resource",
     "company": "Amazon",
@@ -12778,13 +12771,6 @@
     "domain": "close.io",
     "name": "Close Resource",
     "company": "Close",
-    "category": "Analytics",
-    "risk": "Medium"
-  },
-  {
-    "domain": "cloudflare.com",
-    "name": "Cloudflare Resource",
-    "company": "Cloudflare",
     "category": "Analytics",
     "risk": "Medium"
   },
@@ -16696,13 +16682,6 @@
   },
   {
     "domain": "google.co.zw",
-    "name": "Google Resource",
-    "company": "Google",
-    "category": "Analytics",
-    "risk": "Medium"
-  },
-  {
-    "domain": "google.com",
     "name": "Google Resource",
     "company": "Google",
     "category": "Analytics",
@@ -22121,13 +22100,6 @@
   },
   {
     "domain": "live.net",
-    "name": "Microsoft Resource",
-    "company": "Microsoft",
-    "category": "Analytics",
-    "risk": "Medium"
-  },
-  {
-    "domain": "microsoft.com",
     "name": "Microsoft Resource",
     "company": "Microsoft",
     "category": "Analytics",

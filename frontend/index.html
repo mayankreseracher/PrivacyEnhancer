@@ -22,6 +22,10 @@
     <div class="header-controls">
       <div style="display: flex; align-items: center; gap: 8px; margin-right: 12px;">
         <span id="hostOsBadge" style="background: rgba(0, 229, 255, 0.12); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--accent-glow); font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; font-weight: 600;">🖥️ OS: Detecting...</span>
+        <button class="update-pill-btn" id="updatePillBtn" onclick="openUpdateModal()" title="System Updates & Version" aria-label="System Updates">
+          <span class="update-pill-dot" id="updatePillDot"></span>
+          <span id="updatePillText">v1.0.5</span>
+        </button>
         <span class="live-pulse" id="enginePulse"></span>
         <span style="font-size: 0.8rem; font-weight: 700; color: #00ff9d;" id="engineStatus">ENGINE ARMED</span>
       </div>
@@ -268,6 +272,8 @@
           <h2 style="font-size: 1.25rem; font-weight: 700;">Per-Application Firewall & Tracker Control</h2>
           <p style="font-size: 0.85rem; color: var(--text-muted);">
             Neutralize tracking libraries inside specific desktop apps without breaking their core functionality.
+          </p>
+        </div>
         <div style="display: flex; gap: 10px;">
           <button class="btn-action" id="openAppPickerBtn" style="background: linear-gradient(135deg, rgba(0, 255, 157, 0.25), rgba(0, 229, 255, 0.25)); border-color: var(--accent-safe); color: #fff; font-weight: 700;">
             ➕ Add / Select Installed App
@@ -344,9 +350,9 @@
             <tr>
               <th>Type</th>
               <th>Target Value</th>
-              <th>Action</th>
+              <th>Policy</th>
               <th>Created</th>
-              <th>Action</th>
+              <th>Manage</th>
             </tr>
           </thead>
           <tbody id="rulesTableBody">
@@ -818,6 +824,99 @@
             </div>
           </div>
 
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto-Updater Modal (Glassmorphic) -->
+    <div class="modal-backdrop" id="updateModal" role="dialog" aria-modal="true" aria-labelledby="updateModalTitle">
+      <div class="modal-dialog update-modal-dialog">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 1.5rem;">🚀</span>
+            <div>
+              <h3 id="updateModalTitle" style="font-size: 1.15rem; font-weight: 700; color: #fff;">System Updates & Maintenance</h3>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Sovereign Auto-Update & Signature Delivery Engine</div>
+            </div>
+          </div>
+          <button class="modal-close-btn" onclick="closeUpdateModal()" aria-label="Close modal">&times;</button>
+        </div>
+
+        <div class="modal-body" style="padding: 20px;">
+          <!-- Version Status Hero Card -->
+          <div class="update-hero-card" id="updateHeroCard">
+            <div class="update-version-split">
+              <div class="version-box">
+                <span class="version-label">Current Version</span>
+                <span class="version-value" id="updateCurrentVersion">v1.0.5</span>
+              </div>
+              <div class="version-arrow">➔</div>
+              <div class="version-box">
+                <span class="version-label">Latest Release</span>
+                <span class="version-value" id="updateLatestVersion">Scanning...</span>
+              </div>
+            </div>
+            <div class="update-badge-status" id="updateBadgeStatus" style="margin-top: 12px; text-align: center;">
+              <span class="badge badge-functional" id="updateStatusPill">Checking update status...</span>
+            </div>
+          </div>
+
+          <!-- Release Metadata -->
+          <div id="updateReleaseMeta" style="margin-top: 16px; display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <div style="font-weight: 700; color: #fff; font-size: 0.95rem;" id="updateReleaseTitle">Release Title</div>
+              <span style="font-size: 0.75rem; color: var(--text-muted);" id="updateReleaseDate">Published: Recently</span>
+            </div>
+            <div class="changelog-box" id="updateChangelog">
+              <!-- Markdown release notes rendered here -->
+            </div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 8px;" id="updateAssetInfo">
+              Target Package: <span id="updateAssetName" style="color: var(--accent-cyan); font-family: var(--font-mono);">-</span> 
+              (<span id="updateAssetSize">- MB</span>)
+            </div>
+          </div>
+
+          <!-- Download Progress Bar -->
+          <div id="updateProgressContainer" style="margin-top: 16px; display: none;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 6px;">
+              <span style="font-weight: 600; color: var(--accent-cyan);" id="updateProgressText">Downloading update...</span>
+              <span style="font-family: var(--font-mono); color: #fff;" id="updateProgressPercent">0%</span>
+            </div>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="updateProgressFill" style="width: 0%;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-muted); margin-top: 4px;">
+              <span id="updateSpeedText">0 KB/s</span>
+              <span id="updateBytesText">0 MB / 0 MB</span>
+            </div>
+          </div>
+
+          <!-- Auto Check Settings Toggle -->
+          <div style="margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-size: 0.85rem; font-weight: 600; color: #fff;">Automatic Background Updates</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Check for threat definitions and updates periodically on startup</div>
+            </div>
+            <label class="switch" style="width: 38px; height: 20px;">
+              <input type="checkbox" id="updaterAutoCheckToggle" checked onchange="toggleAutoCheckUpdates(this.checked)">
+              <span class="slider" style="border-radius: 20px;"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; background: rgba(0,0,0,0.3); border-top: 1px solid var(--border-color);">
+          <button class="btn-action" id="updateCheckBtn" onclick="checkUpdates(true)" style="display: flex; align-items: center; gap: 6px;">
+            <span id="updateCheckIcon">🔄</span> <span>Check for Updates</span>
+          </button>
+          <div style="display: flex; gap: 10px;">
+            <a id="updateGithubLink" href="https://github.com/mayankreseracher/PrivacyEnhancer/releases" target="_blank" class="btn-action" style="text-decoration: none;">GitHub Releases</a>
+            <button class="btn-action" id="updateDownloadBtn" onclick="downloadUpdate()" style="display: none; background: linear-gradient(135deg, rgba(0, 229, 255, 0.3), rgba(0, 255, 157, 0.3)); border-color: var(--accent-safe); color: #fff; font-weight: 700;">
+              ⬇️ Download Update
+            </button>
+            <button class="btn-action" id="updateApplyBtn" onclick="applyUpdate()" style="display: none; background: linear-gradient(135deg, #00ff9d, #00b4d8); color: #050a12; font-weight: 800; border: none; box-shadow: 0 4px 14px rgba(0, 255, 157, 0.4);">
+              ⚡ Install & Restart
+            </button>
+          </div>
         </div>
       </div>
     </div>

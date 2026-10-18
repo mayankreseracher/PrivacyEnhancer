@@ -596,12 +596,14 @@ main {
   align-items: center;
   justify-content: center;
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.25s ease;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
 }
 
 .modal-backdrop.open {
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
 }
 
@@ -616,6 +618,9 @@ main {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.modal-backdrop.open .modal-dialog {
   animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -1459,6 +1464,175 @@ main {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ==================== Auto-Updater Styles ==================== */
+.update-pill-btn {
+  background: rgba(0, 229, 255, 0.08);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+}
+
+.update-pill-btn:hover {
+  background: rgba(0, 229, 255, 0.18);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
+  transform: translateY(-1px);
+}
+
+.update-pill-btn.update-available {
+  background: linear-gradient(135deg, rgba(255, 0, 85, 0.2), rgba(255, 183, 3, 0.2));
+  border-color: var(--accent-warn);
+  color: #fff;
+  animation: updateGlow 2s infinite;
+}
+
+@keyframes updateGlow {
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 183, 3, 0.4); }
+  50% { box-shadow: 0 0 18px rgba(255, 183, 3, 0.8); }
+}
+
+.update-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-safe);
+  display: inline-block;
+}
+
+.update-pill-btn.update-available .update-pill-dot {
+  background: var(--accent-warn);
+  box-shadow: 0 0 6px var(--accent-warn);
+}
+
+.update-modal-dialog {
+  max-width: 680px;
+}
+
+.update-hero-card {
+  background: radial-gradient(circle at center, rgba(16, 26, 46, 0.8) 0%, rgba(8, 12, 22, 0.95) 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 18px 24px;
+}
+
+.update-version-split {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 16px;
+}
+
+.version-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.version-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.version-value {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.version-arrow {
+  color: var(--accent-cyan);
+  font-size: 1.4rem;
+}
+
+.changelog-box {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 0.82rem;
+  color: #cbd5e1;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  font-family: var(--font-sans);
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-safe));
+  border-radius: 6px;
+  transition: width 0.3s ease;
+  box-shadow: 0 0 10px rgba(0, 255, 157, 0.5);
+}
+
+/* ==================== Responsive Breakpoints ==================== */
+@media (max-width: 900px) {
+  header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+
+  .header-controls {
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .nav-tabs {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .speedometers-container {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .speedometers-container {
+    grid-template-columns: 1fr;
+  }
+
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    max-width: calc(100vw - 24px);
+  }
 }
 
 

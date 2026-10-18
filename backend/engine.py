@@ -22,6 +22,7 @@ from .proton_service import ProtonService
 from .orbot_service import OrbotService
 from .port_forwarder import PortForwarder
 from .platform_helper import PlatformHelper
+from .updater import AutoUpdater
 
 class TrackerEngine:
     def __init__(self):
@@ -33,6 +34,8 @@ class TrackerEngine:
         self.proton = ProtonService()
         self.orbot = OrbotService()
         self.port_forwarder = PortForwarder()
+        self.updater = AutoUpdater(database=self.database, event_callback=self.on_updater_event)
+        self._updater_task = None
         
         # State
         self.protection_mode = "MAX_PRIVACY" # MAX_PRIVACY, BALANCED, AUDIT_ONLY, LOCKDOWN
@@ -149,10 +152,37 @@ class TrackerEngine:
             except Exception:
                 pass
 
+    def on_updater_event(self, event: Dict[str, Any]):
+        """Dispatches updater events (e.g. UPDATE_AVAILABLE, UPDATE_PROGRESS, UPDATE_READY, UPDATE_STATUS)."""
+        if event.get("type") == "UPDATE_AVAILABLE":
+            up_data = event.get("data", {})
+            v = up_data.get("latest_version", "")
+            now = time.time()
+            alert = {
+                "id": f"alert-{int(now * 1000)}-update",
+                "type": "UPDATE_AVAILABLE",
+                "severity": "info",
+                "title": f"Update Available: TrackerControl PC v{v}",
+                "message": f"A new version (v{v}) is available with the latest tracker definitions and security features.",
+                "process_name": "TrackerControl",
+                "timestamp": now,
+                "domain": "github.com",
+                "ip": "GitHub Releases"
+            }
+            self._add_alert(alert)
+
+        if self.active_websockets:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.broadcast_message(event))
+            except Exception:
+                pass
+
     async def broadcast_message(self, message_dict: Dict[str, Any]):
         dead_sockets = set()
         message = json.dumps(message_dict)
-        for ws in self.active_websockets:
+        for ws in list(self.active_websockets):
             try:
                 await ws.send_text(message)
             except Exception:
@@ -219,7 +249,8 @@ class TrackerEngine:
                 "system_summary": PlatformHelper.get_system_summary(),
                 "recent_connections": self.recent_events_cache[:30],
                 "bandwidth_history": self.bandwidth_history[-60:],
-                "recent_alerts": self.alerts[:30]
+                "recent_alerts": self.alerts[:30],
+                "updater": self.updater.get_status() if hasattr(self, "updater") else None
             }
         }))
 
@@ -303,8 +334,17 @@ class TrackerEngine:
         self._bandwidth_task = asyncio.create_task(self._bandwidth_loop())
         print(f"[BandwidthEngine] Real-time traffic graph sampler active.")
 
+        # Start Auto-Updater background checking loop if enabled
+        if hasattr(self, "updater") and self.updater:
+            self._updater_task = asyncio.create_task(self.updater.start_periodic_check(delay_initial_seconds=4))
+            print("[AutoUpdater] Background update sentry initialized.")
+
     async def stop(self):
         print("[Engine] Stopping TrackerControl PC...")
+        if hasattr(self, "updater") and self.updater:
+            self.updater.stop()
+        if self._updater_task:
+            self._updater_task.cancel()
         if self._bandwidth_task:
             self._bandwidth_task.cancel()
         if self.process_monitor:
@@ -328,6 +368,14 @@ class TrackerEngine:
                 self.firewall.flush_all_tc_rules()
             except Exception as e:
                 print(f"[Engine] Notice during firewall cleanup: {e}")
+
+        # Close all active WebSockets gracefully
+        for ws in list(self.active_websockets):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self.active_websockets.clear()
 
     def get_bandwidth_history(self) -> List[Dict[str, Any]]:
         return self.bandwidth_history

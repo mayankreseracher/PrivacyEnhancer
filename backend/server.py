@@ -18,13 +18,13 @@ from .platform_helper import PlatformHelper
 
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
-app = FastAPI(title="TrackerControl PC", version="1.0.0")
+app = FastAPI(title="TrackerControl PC", version="1.0.5")
 
-# Enable CORS
+# Enable CORS (allow all origins with credentials=False for security)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -443,6 +443,46 @@ async def export_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=trackercontrol_export.csv"}
     )
+
+# ==================== Auto-Updater Endpoints ====================
+
+@app.get("/api/updater/status")
+async def get_updater_status():
+    if hasattr(engine, "updater") and engine.updater:
+        return engine.updater.get_status()
+    return {"status": "disabled", "current_version": "1.0.5"}
+
+@app.post("/api/updater/check")
+async def check_for_updates():
+    if hasattr(engine, "updater") and engine.updater:
+        return await engine.updater.check_for_updates(manual=True)
+    return {"success": False, "error": "Updater not initialized"}
+
+@app.post("/api/updater/download")
+async def download_update():
+    if hasattr(engine, "updater") and engine.updater:
+        return await engine.updater.start_download()
+    return {"success": False, "error": "Updater not initialized"}
+
+@app.post("/api/updater/apply")
+async def apply_update():
+    if hasattr(engine, "updater") and engine.updater:
+        return await engine.updater.apply_update()
+    return {"success": False, "error": "Updater not initialized"}
+
+class UpdaterSettingsRequest(BaseModel):
+    auto_check: Optional[bool] = None
+    interval_hours: Optional[int] = None
+
+@app.post("/api/updater/settings")
+async def update_updater_settings(payload: UpdaterSettingsRequest):
+    if hasattr(engine, "updater") and engine.updater:
+        if payload.auto_check is not None:
+            engine.updater.set_auto_check_enabled(payload.auto_check)
+        if payload.interval_hours is not None:
+            engine.updater.set_check_interval_hours(payload.interval_hours)
+        return {"success": True, "settings": engine.updater.get_status()}
+    return {"success": False, "error": "Updater not initialized"}
 
 # Static Dashboard
 @app.get("/")
