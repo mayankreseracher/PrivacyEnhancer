@@ -70,9 +70,9 @@ hidden_imports = [
 ]
 
 if IS_WIN:
-    hidden_imports.extend(['winreg', 'clr', 'webview.platforms.winforms'])
+    hidden_imports.extend(['winreg'])
 elif IS_MAC:
-    hidden_imports.extend(['plistlib', 'webview.platforms.cocoa'])
+    hidden_imports.extend(['plistlib'])
 
 a = Analysis(
     ['main.py'],

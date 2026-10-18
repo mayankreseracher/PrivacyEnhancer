@@ -9,7 +9,8 @@
     "status": "Disabled",
     "bytes_forwarded": 0,
     "connections_handled": 0,
-    "created_at": 1791711486.4521806
+    "created_at": 1791711486.4521806,
+    "is_active": false
   },
   "fwd-9055-9050": {
     "id": "fwd-9055-9050",
@@ -21,6 +22,21 @@
     "status": "Disabled",
     "bytes_forwarded": 0,
     "connections_handled": 0,
-    "created_at": 1791711486.453177
+    "created_at": 1791711486.453177,
+    "is_active": false
+  },
+  "fwd-51825-51825-udp": {
+    "id": "fwd-51825-51825-udp",
+    "name": "WireGuard UDP P2P",
+    "listen_port": 51825,
+    "target_host": "127.0.0.1",
+    "target_port": 51825,
+    "protocol": "UDP",
+    "tunnel_id": "sys-proton",
+    "tunnel_name": "Proton WireGuard",
+    "status": "Disabled",
+    "bytes_forwarded": 0,
+    "connections_handled": 0,
+    "created_at": 1792361426.441815
   }
 }

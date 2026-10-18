@@ -1391,7 +1391,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (closeCustomTunnelBtn) closeCustomTunnelBtn.addEventListener("click", () => document.getElementById("customTunnelModal").classList.remove("open"));
 
   const openPfModalBtn = document.getElementById("openPortForwardModalBtn");
-  if (openPfModalBtn) openPfModalBtn.addEventListener("click", () => document.getElementById("portForwardModal").classList.add("open"));
+  if (openPfModalBtn) {
+    openPfModalBtn.addEventListener("click", () => {
+      populatePortForwardTunnels();
+      document.getElementById("portForwardModal").classList.add("open");
+    });
+  }
 
   const closePfModalBtn = document.getElementById("closePortForwardModalBtn");
   if (closePfModalBtn) closePfModalBtn.addEventListener("click", () => document.getElementById("portForwardModal").classList.remove("open"));
@@ -1594,8 +1599,9 @@ async function loadVpnState() {
     // 4. Orbot Status
     loadOrbotStatus();
 
-    // 5. Port Forwarding
+    // 5. Port Forwarding & NAT-PMP Dynamic Status
     loadPortForwarding();
+    loadNatPmpStatus();
 
     // 6. App Split Tunneling Matrix
     renderAppRoutingMatrix();
@@ -2084,7 +2090,104 @@ async function cycleOrbotIdentity() {
   }
 }
 
-// ==================== Port Forwarding Engine ====================
+// ==================== Proton VPN Dynamic NAT-PMP (RFC 6886) Engine ====================
+async function loadNatPmpStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/api/vpn/nat-pmp/status`);
+    const data = await res.json();
+    state.natPmp = data;
+
+    const badge = document.getElementById("natPmpStatusBadge");
+    const portEl = document.getElementById("natPmpAssignedPort");
+    const inPortEl = document.getElementById("natPmpInternalPort");
+    const leaseEl = document.getElementById("natPmpLeaseTime");
+    const reqBtn = document.getElementById("requestNatPmpBtn");
+    const stopBtn = document.getElementById("stopNatPmpBtn");
+
+    if (!badge || !portEl) return;
+
+    if (data.active && data.assigned_external_port) {
+      badge.textContent = "🟢 Dynamic P2P Active";
+      badge.style.background = "rgba(0, 255, 157, 0.2)";
+      badge.style.color = "var(--accent-safe)";
+      badge.style.border = "1px solid rgba(0, 255, 157, 0.4)";
+
+      portEl.innerHTML = `${data.assigned_external_port} <button class="btn-action" style="padding: 2px 8px; font-size: 0.7rem; margin-left: 8px; background: rgba(0,229,255,0.2); border-color: var(--accent-cyan); color: #fff;" onclick="navigator.clipboard.writeText('${data.assigned_external_port}'); showToast('Port Copied', 'Assigned P2P port ${data.assigned_external_port} copied to clipboard!', 'info')">📋 Copy</button>`;
+      inPortEl.textContent = `${data.internal_port} (Local Host)`;
+      leaseEl.textContent = `Expires in ${data.seconds_remaining}s (RFC 6886 Auto-Renewing)`;
+      leaseEl.style.color = "var(--accent-safe)";
+
+      if (reqBtn) reqBtn.style.display = "none";
+      if (stopBtn) stopBtn.style.display = "inline-flex";
+    } else {
+      badge.textContent = data.status === "Refreshing" ? "⚡ Requesting..." : "⚪ Idle";
+      badge.style.background = "rgba(255,255,255,0.06)";
+      badge.style.color = "var(--text-muted)";
+      badge.style.border = "none";
+
+      portEl.textContent = "---";
+      inPortEl.textContent = "---";
+      leaseEl.textContent = data.error ? `Notice: ${data.error}` : "RFC 6886 Ping Inactive";
+      leaseEl.style.color = data.error ? "#ff0055" : "var(--text-muted)";
+
+      if (reqBtn) reqBtn.style.display = "inline-flex";
+      if (stopBtn) stopBtn.style.display = "none";
+    }
+  } catch (err) {
+    console.error("Error loading NAT-PMP status:", err);
+  }
+}
+
+window.requestProtonNatPmp = async function() {
+  showToast("Proton NAT-PMP", "Sending RFC 6886 port mapping request to Proton gateway 10.2.0.1:5351...", "info");
+  try {
+    const res = await fetch(`${API_BASE}/api/vpn/nat-pmp/request`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lifetime: 60, gateway: "10.2.0.1" })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("P2P Port Assigned!", `Proton assigned public port: ${data.assigned_external_port} (TCP & UDP dual stream)`, "success");
+      await loadNatPmpStatus();
+      await loadPortForwarding();
+    } else {
+      showToast("NAT-PMP Notice", data.error || "Failed to obtain NAT-PMP mapping. Ensure connected to a Proton P2P server.", "warn");
+      await loadNatPmpStatus();
+    }
+  } catch (err) {
+    showToast("NAT-PMP Error", "Error requesting NAT-PMP port: " + err, "error");
+  }
+};
+
+window.stopProtonNatPmp = async function() {
+  try {
+    const res = await fetch(`${API_BASE}/api/vpn/nat-pmp/stop`, { method: "POST" });
+    const data = await res.json();
+    showToast("Port Released", `Dynamic port ${data.released_port || ''} released.`, "info");
+    await loadNatPmpStatus();
+    await loadPortForwarding();
+  } catch (err) {
+    showToast("Error", "Error releasing port: " + err, "error");
+  }
+};
+
+function populatePortForwardTunnels() {
+  const sel = document.getElementById("pfTunnelSelect");
+  if (!sel) return;
+  sel.innerHTML = `
+    <option value="all">🌐 All Interfaces (Global Forwarder)</option>
+    <option value="orbot">🧅 Orbot / Tor SOCKS5</option>
+  `;
+  (state.vpnTunnels || []).forEach(t => {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = `🛡️ ${t.name} (${t.country || 'WireGuard'})`;
+    sel.appendChild(opt);
+  });
+}
+
+// ==================== Multi-VPN Port Forwarding Engine ====================
 async function loadPortForwarding() {
   try {
     const res = await fetch(`${API_BASE}/api/vpn/port-forwarding`);
@@ -2101,7 +2204,7 @@ function renderPortForwarding() {
   tbody.innerHTML = "";
 
   if (state.portForwardRules.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">No port forwarding rules active. Click "➕ Add Port Forward Rule" to forward WireGuard, P2P, or Tor ports.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">No port forwarding rules active. Click "➕ Add Port Forward Rule" to forward WireGuard, P2P, or Tor ports.</td></tr>`;
     return;
   }
 
@@ -2109,11 +2212,22 @@ function renderPortForwarding() {
     const tr = document.createElement("tr");
     const isActive = r.is_active || r.status === "Active";
 
+    const protoBadge = r.protocol === "BOTH"
+      ? `<span class="badge" style="background: rgba(0, 229, 255, 0.2); color: var(--accent-cyan); border: 1px solid rgba(0, 229, 255, 0.4);">TCP+UDP</span>`
+      : `<span class="badge badge-functional">${r.protocol}</span>`;
+
+    const tunnelBadge = r.tunnel_id === "orbot"
+      ? `<span class="badge" style="background: rgba(157, 78, 221, 0.2); color: #c77dff; border: 1px solid rgba(157, 78, 221, 0.4);">🧅 ${escapeHtml(r.tunnel_name || 'Orbot')}</span>`
+      : (r.tunnel_id && r.tunnel_id !== "all"
+        ? `<span class="badge" style="background: rgba(181, 23, 158, 0.2); color: #fff; border: 1px solid var(--accent-purple);">🛡️ ${escapeHtml(r.tunnel_name || 'WireGuard')}</span>`
+        : `<span class="badge" style="background: rgba(255, 255, 255, 0.06); color: var(--text-muted);">🌐 Global</span>`);
+
     tr.innerHTML = `
       <td style="font-weight: 700; color: #fff;">${escapeHtml(r.name)}</td>
-      <td style="font-family: var(--font-mono); color: var(--accent-cyan);">${r.listen_port}</td>
+      <td>${tunnelBadge}</td>
+      <td style="font-family: var(--font-mono); color: var(--accent-cyan); font-weight: 700;">${r.listen_port}</td>
       <td style="font-family: var(--font-mono);">${escapeHtml(r.target_host)}:${r.target_port}</td>
-      <td><span class="badge badge-functional">${r.protocol}</span></td>
+      <td>${protoBadge}</td>
       <td style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">
         ${r.connections_handled || 0} conns &bull; ${Math.round((r.bytes_forwarded || 0) / 1024)} KB
       </td>
@@ -2135,12 +2249,16 @@ function renderPortForwarding() {
   });
 }
 
-window.applyPortPreset = function(name, listen_port, target_host, target_port, proto) {
+window.applyPortPreset = function(name, listen_port, target_host, target_port, proto, tunnel_id) {
   document.getElementById("pfRuleName").value = name;
   document.getElementById("pfListenPort").value = listen_port;
   document.getElementById("pfTargetHost").value = target_host;
   document.getElementById("pfTargetPort").value = target_port;
-  document.getElementById("pfProtocol").value = proto;
+  document.getElementById("pfProtocol").value = proto || "TCP";
+  if (tunnel_id) {
+    const sel = document.getElementById("pfTunnelSelect");
+    if (sel) sel.value = tunnel_id;
+  }
 };
 
 async function savePortForwardRule() {
@@ -2148,7 +2266,10 @@ async function savePortForwardRule() {
   const listen_port = parseInt(document.getElementById("pfListenPort").value);
   const target_host = document.getElementById("pfTargetHost").value.trim() || "127.0.0.1";
   const target_port = parseInt(document.getElementById("pfTargetPort").value);
-  const protocol = document.getElementById("pfProtocol").value;
+  const protocol = document.getElementById("pfProtocol").value || "TCP";
+  const tunnelSelect = document.getElementById("pfTunnelSelect");
+  const tunnel_id = tunnelSelect ? tunnelSelect.value : "all";
+  const tunnel_name = tunnelSelect && tunnelSelect.options[tunnelSelect.selectedIndex] ? tunnelSelect.options[tunnelSelect.selectedIndex].text : "All Interfaces";
 
   if (!listen_port || !target_port) {
     showToast("Validation", "Please specify both listen port and target port.", "warn");
@@ -2159,11 +2280,11 @@ async function savePortForwardRule() {
     await fetch(`${API_BASE}/api/vpn/port-forwarding`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, listen_port, target_host, target_port, protocol, auto_start: true })
+      body: JSON.stringify({ name, listen_port, target_host, target_port, protocol, tunnel_id, tunnel_name, auto_start: true })
     });
     document.getElementById("portForwardModal").classList.remove("open");
     loadPortForwarding();
-    showToast("Port Forwarding Deployed", `Port Forwarding Rule '${name}' (Port ${listen_port} &rarr; ${target_host}:${target_port}) deployed!`, "success");
+    showToast("Port Forwarding Deployed", `Rule '${name}' (${protocol} ${listen_port} &rarr; ${target_host}:${target_port}) bound to ${tunnel_name}!`, "success");
   } catch (err) {
     showToast("Port Forward Error", "Error deploying port forward rule: " + err, "error");
   }

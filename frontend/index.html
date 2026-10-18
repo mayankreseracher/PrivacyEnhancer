@@ -541,15 +541,64 @@
         </div>
       </div>
 
-      <!-- Section 4: Port Forwarding Engine (NAT / WireGuard / P2P) -->
+      <!-- Section 4: Proton VPN NAT-PMP Dynamic P2P Port Forwarding (RFC 6886) -->
+      <div class="glass-panel" style="padding: 20px; margin-bottom: 20px; border-left: 4px solid var(--accent-cyan);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 1.4rem;">⚡</span>
+              <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff;">
+                Proton VPN Dynamic NAT-PMP Port Forwarding (RFC 6886)
+              </h3>
+              <span class="badge" id="natPmpStatusBadge" style="background: rgba(255,255,255,0.06); color: var(--text-muted);">
+                Idle
+              </span>
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+              Request dynamic public P2P ports through Proton WireGuard gateway (<code>10.2.0.1:5351</code>) with automated background keepalive lease renewal for BitTorrent, seeding, and hosting.
+            </p>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn-action" id="requestNatPmpBtn" onclick="requestProtonNatPmp()" style="background: rgba(0, 229, 255, 0.2); border-color: var(--accent-cyan); color: #fff;">
+              ⚡ Request Dynamic P2P Port
+            </button>
+            <button class="btn-action btn-danger" id="stopNatPmpBtn" onclick="stopProtonNatPmp()" style="display: none;">
+              🛑 Release Port
+            </button>
+          </div>
+        </div>
+
+        <div class="vpn-telemetry-pills" style="margin-top: 10px;">
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Public Assigned Port (Proton Exit)</div>
+            <div class="vpn-pill-val" style="font-size: 1.2rem; font-weight: 800; color: var(--accent-cyan); font-family: var(--font-mono);" id="natPmpAssignedPort">
+              ---
+            </div>
+          </div>
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Internal Client Port</div>
+            <div class="vpn-pill-val" style="font-family: var(--font-mono);" id="natPmpInternalPort">---</div>
+          </div>
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Protocols & Gateway</div>
+            <div class="vpn-pill-val" id="natPmpGateway">Dual TCP+UDP (10.2.0.1:5351)</div>
+          </div>
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Keepalive Lease Renewal</div>
+            <div class="vpn-pill-val" style="color: var(--accent-safe);" id="natPmpLeaseTime">RFC 6886 Ping Inactive</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 5: Multi-VPN Port Forwarding Engine (NAT / WireGuard / P2P) -->
       <div class="glass-panel" style="padding: 20px; margin-bottom: 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
           <div>
             <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
-              <span>🔀</span> Port Forwarding & Relay Engine
+              <span>🔀</span> Multi-VPN Port Forwarding & Relay Engine
             </h3>
             <p style="font-size: 0.8rem; color: var(--text-muted);">
-              Forward incoming/outgoing TCP & UDP traffic, relay WireGuard (51820), Tor/Orbot (9050), and P2P ports.
+              Forward incoming/outgoing TCP & UDP traffic, bind rules to specific WireGuard tunnels or Orbot (9050), and proxy P2P ports.
             </p>
           </div>
           <button class="btn-action" id="openPortForwardModalBtn" style="background: rgba(0, 229, 255, 0.15); border-color: var(--accent-cyan); color: #fff;">
@@ -562,6 +611,7 @@
             <thead>
               <tr>
                 <th>Rule Name</th>
+                <th>VPN Tunnel</th>
                 <th>Listen Port</th>
                 <th>Target Destination</th>
                 <th>Protocol</th>
@@ -590,10 +640,10 @@
           <div style="margin-bottom: 14px;">
             <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 6px;">Quick Presets:</label>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <button class="filter-pill" type="button" onclick="applyPortPreset('WireGuard Tunnel Relay', 51820, '127.0.0.1', 51820, 'UDP')">WireGuard (51820)</button>
-              <button class="filter-pill" type="button" onclick="applyPortPreset('Orbot SOCKS5 Relay', 9055, '127.0.0.1', 9050, 'TCP')">Orbot SOCKS5 (9055&rarr;9050)</button>
-              <button class="filter-pill" type="button" onclick="applyPortPreset('P2P Torrent / Game Port', 6881, '127.0.0.1', 6881, 'TCP')">Torrent P2P (6881)</button>
-              <button class="filter-pill" type="button" onclick="applyPortPreset('Web UI Forward', 8080, '127.0.0.1', 8000, 'TCP')">Web Relay (8080&rarr;8000)</button>
+              <button class="filter-pill" type="button" onclick="applyPortPreset('WireGuard UDP Relay', 51820, '127.0.0.1', 51820, 'UDP', 'all')">WireGuard UDP (51820)</button>
+              <button class="filter-pill" type="button" onclick="applyPortPreset('P2P Torrent Dual Stream', 6881, '127.0.0.1', 6881, 'BOTH', 'all')">P2P Torrent (BOTH 6881)</button>
+              <button class="filter-pill" type="button" onclick="applyPortPreset('Orbot SOCKS5 Relay', 9055, '127.0.0.1', 9050, 'TCP', 'orbot')">Orbot SOCKS5 (9055&rarr;9050)</button>
+              <button class="filter-pill" type="button" onclick="applyPortPreset('Local Web UI Relay', 8080, '127.0.0.1', 8000, 'TCP', 'all')">Web UI (8080&rarr;8000)</button>
             </div>
           </div>
 
@@ -602,14 +652,23 @@
             <input type="text" id="pfRuleName" class="search-box" style="width: 100%;" placeholder="e.g. WireGuard Relay">
           </div>
 
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Bind to VPN Tunnel / Gateway:</label>
+            <select id="pfTunnelSelect" class="mode-select" style="width: 100%;">
+              <option value="all">🌐 All Interfaces (Global Forwarder)</option>
+              <option value="orbot">🧅 Orbot / Tor SOCKS5</option>
+            </select>
+          </div>
+
           <div style="display: flex; gap: 12px; margin-bottom: 12px;">
             <div style="flex: 1;">
               <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Listen Port (Local):</label>
               <input type="number" id="pfListenPort" class="search-box" style="width: 100%;" placeholder="e.g. 51820">
             </div>
-            <div style="width: 120px;">
+            <div style="width: 150px;">
               <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Protocol:</label>
               <select id="pfProtocol" class="mode-select" style="width: 100%;">
+                <option value="BOTH">BOTH (TCP + UDP)</option>
                 <option value="TCP">TCP</option>
                 <option value="UDP">UDP</option>
               </select>

@@ -318,6 +318,11 @@ class TrackerEngine:
                 print(f"[Engine] Notice during DNS restore: {e}")
             if self.dns_proxy.transport:
                 self.dns_proxy.transport.close()
+        if self.port_forwarder:
+            try:
+                await self.port_forwarder.stop_all()
+            except Exception as e:
+                print(f"[Engine] Notice during port forwarder cleanup: {e}")
         if self.firewall:
             try:
                 self.firewall.flush_all_tc_rules()

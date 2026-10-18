@@ -325,7 +325,7 @@ async def get_orbot_identity():
 async def cycle_orbot_identity():
     return engine.orbot.request_new_identity()
 
-# ==================== Port Forwarding Endpoints ====================
+# ==================== Port Forwarding & Multi-VPN Relay Endpoints ====================
 
 @app.get("/api/vpn/port-forwarding")
 async def get_port_forwarding_rules():
@@ -336,7 +336,9 @@ class CreatePortForwardRequest(BaseModel):
     listen_port: int
     target_host: str
     target_port: int
-    protocol: Optional[str] = "TCP"
+    protocol: Optional[str] = "TCP" # "TCP", "UDP", "BOTH"
+    tunnel_id: Optional[str] = "all"
+    tunnel_name: Optional[str] = "All Interfaces"
     auto_start: Optional[bool] = True
 
 @app.post("/api/vpn/port-forwarding")
@@ -347,6 +349,8 @@ async def create_port_forward_rule(payload: CreatePortForwardRequest):
         target_host=payload.target_host,
         target_port=payload.target_port,
         protocol=payload.protocol or "TCP",
+        tunnel_id=payload.tunnel_id or "all",
+        tunnel_name=payload.tunnel_name or "All Interfaces",
         auto_start=payload.auto_start if payload.auto_start is not None else True
     )
     if payload.auto_start:
@@ -364,6 +368,30 @@ async def stop_port_forward_rule(rule_id: str):
 @app.delete("/api/vpn/port-forwarding/{rule_id}")
 async def delete_port_forward_rule(rule_id: str):
     return await engine.port_forwarder.delete_rule(rule_id)
+
+# ==================== Proton VPN Dynamic NAT-PMP (RFC 6886) Endpoints ====================
+
+@app.get("/api/vpn/nat-pmp/status")
+async def get_nat_pmp_status():
+    return engine.port_forwarder.nat_pmp.get_status()
+
+class NatPmpRequest(BaseModel):
+    internal_port: Optional[int] = None
+    lifetime: Optional[int] = 60
+    gateway: Optional[str] = "10.2.0.1"
+
+@app.post("/api/vpn/nat-pmp/request")
+async def request_nat_pmp_port(payload: NatPmpRequest):
+    res = await engine.port_forwarder.nat_pmp.request_p2p_port(
+        internal_port=payload.internal_port,
+        lifetime=payload.lifetime or 60,
+        gateway_ip=payload.gateway or "10.2.0.1"
+    )
+    return res
+
+@app.post("/api/vpn/nat-pmp/stop")
+async def stop_nat_pmp_port():
+    return await engine.port_forwarder.nat_pmp.stop_p2p_port()
 
 # ==================== Split Tunneling ====================
 
