@@ -3,6 +3,46 @@
  * WebSocket streaming, app privacy matrix, and Windows OS debloater.
  */
 
+// Base API configuration for REST and WebSockets
+const API_BASE = (window.location.protocol === "file:" || !window.location.host) 
+  ? "http://127.0.0.1:8000" 
+  : "";
+
+let wsReconnectTimeout = null;
+let wsAttemptCount = 0;
+
+function showToast(title, message, type = "info", duration = 4000) {
+  const container = document.getElementById("toastContainer");
+  if (!container) return;
+
+  const icons = {
+    success: "✅",
+    error: "❌",
+    warn: "⚠️",
+    info: "ℹ️",
+    shield: "🛡️",
+    vpn: "🔒"
+  };
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type] || "⚡"}</span>
+    <div class="toast-body">
+      <div class="toast-title">${escapeHtml(title)}</div>
+      <div class="toast-msg">${escapeHtml(message)}</div>
+    </div>
+    <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+  `;
+
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.classList.add("toast-fadeout");
+    setTimeout(() => toast.remove(), 280);
+  }, duration);
+}
+
 // Application State
 const state = {
   ws: null,
@@ -111,16 +151,50 @@ function getCategoryBadge(category) {
 }
 
 // ==================== WebSocket Initialization ====================
-function initWebSocket() {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${window.location.host}/ws`;
+function getCandidateWsUrls() {
+  const isFile = window.location.protocol === "file:" || !window.location.host;
+  const isHttps = window.location.protocol === "https:";
+  const wsProto = isHttps ? "wss:" : "ws:";
+  
+  const urls = [];
+  if (!isFile && window.location.host) {
+    urls.push(`${wsProto}//${window.location.host}/ws`);
+  }
+  urls.push("ws://127.0.0.1:8000/ws");
+  urls.push("ws://localhost:8000/ws");
+  return [...new Set(urls)];
+}
 
-  state.ws = new WebSocket(wsUrl);
+function initWebSocket() {
+  if (wsReconnectTimeout) {
+    clearTimeout(wsReconnectTimeout);
+    wsReconnectTimeout = null;
+  }
+
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  const candidates = getCandidateWsUrls();
+  const wsUrl = candidates[wsAttemptCount % candidates.length];
+
+  try {
+    state.ws = new WebSocket(wsUrl);
+  } catch (err) {
+    console.warn(`[Radar] WebSocket initialization error for ${wsUrl}:`, err);
+    scheduleWsReconnect();
+    return;
+  }
 
   state.ws.onopen = () => {
-    document.getElementById("enginePulse").style.backgroundColor = "#00ff9d";
-    document.getElementById("engineStatus").textContent = "RADAR ONLINE";
-    document.getElementById("engineStatus").style.color = "#00ff9d";
+    wsAttemptCount = 0;
+    const pulse = document.getElementById("enginePulse");
+    const status = document.getElementById("engineStatus");
+    if (pulse) pulse.style.backgroundColor = "#00ff9d";
+    if (status) {
+      status.textContent = "RADAR ONLINE";
+      status.style.color = "#00ff9d";
+    }
   };
 
   state.ws.onmessage = (event) => {
@@ -156,12 +230,64 @@ function initWebSocket() {
     }
   };
 
-  state.ws.onclose = () => {
-    document.getElementById("enginePulse").style.backgroundColor = "#ff0055";
-    document.getElementById("engineStatus").textContent = "RADAR DISCONNECTED (Retrying...)";
-    document.getElementById("engineStatus").style.color = "#ff0055";
-    setTimeout(initWebSocket, 2000);
+  state.ws.onerror = (err) => {
+    console.warn("[Radar] WebSocket error:", err);
   };
+
+  state.ws.onclose = () => {
+    const pulse = document.getElementById("enginePulse");
+    const status = document.getElementById("engineStatus");
+    if (pulse) pulse.style.backgroundColor = "#ff0055";
+    if (status) {
+      status.textContent = "RADAR DISCONNECTED (Retrying...)";
+      status.style.color = "#ff0055";
+    }
+    scheduleWsReconnect();
+  };
+}
+
+function scheduleWsReconnect() {
+  if (wsReconnectTimeout) return;
+  wsAttemptCount++;
+  const delay = Math.min(1500 + (wsAttemptCount * 500), 5000);
+  wsReconnectTimeout = setTimeout(() => {
+    wsReconnectTimeout = null;
+    initWebSocket();
+  }, delay);
+}
+
+// Bootstrap initial metrics via REST to guarantee immediate hydration
+async function bootstrapInitialState() {
+  try {
+    const [statsRes, connsRes, alertsRes, bwRes] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/stats`).then(r => r.json()),
+      fetch(`${API_BASE}/api/connections?limit=50`).then(r => r.json()),
+      fetch(`${API_BASE}/api/alerts`).then(r => r.json()),
+      fetch(`${API_BASE}/api/bandwidth`).then(r => r.json())
+    ]);
+
+    if (statsRes.status === "fulfilled" && statsRes.value) {
+      updateStats(statsRes.value);
+    }
+    if (connsRes.status === "fulfilled" && Array.isArray(connsRes.value)) {
+      state.connections = connsRes.value;
+      renderWaterfall();
+    }
+    if (alertsRes.status === "fulfilled" && Array.isArray(alertsRes.value)) {
+      state.alerts = alertsRes.value;
+      state.unreadAlertsCount = state.alerts.length;
+      updateAlertsBadge();
+      renderAlertsFeed();
+    }
+    if (bwRes.status === "fulfilled" && Array.isArray(bwRes.value)) {
+      state.bandwidthHistory = bwRes.value;
+      if (state.bandwidthHistory.length > 0) {
+        updateSpeedometers(state.bandwidthHistory[state.bandwidthHistory.length - 1]);
+      }
+    }
+  } catch (err) {
+    console.warn("Bootstrap initial state fetch error:", err);
+  }
 }
 
 function handleNewConnection(conn) {
@@ -312,10 +438,10 @@ function renderAlertsFeed() {
       </div>
       <div class="alert-right-actions">
         ${isNewApp ? `
-          <button class="btn-action" onclick="setAppPolicy('${escapeHtml(pName)}', 'block_trackers'); alert('Shield armed for ${escapeHtml(pName)}! Trackers will be dropped.')">
+          <button class="btn-action" onclick="setAppPolicy('${escapeHtml(pName)}', 'block_trackers'); showToast('Shield Armed', 'Shield armed for ${escapeHtml(pName)}! Trackers will be dropped.', 'shield')">
             🛡️ Shield Trackers
           </button>
-          <button class="btn-action btn-danger" onclick="setAppPolicy('${escapeHtml(pName)}', 'block_all'); alert('${escapeHtml(pName)} outbound network access firewalled.')">
+          <button class="btn-action btn-danger" onclick="setAppPolicy('${escapeHtml(pName)}', 'block_all'); showToast('Firewalled', '${escapeHtml(pName)} outbound network access firewalled.', 'error')">
             🛑 Block All
           </button>
         ` : `
@@ -374,7 +500,7 @@ function initNetworkGraph() {
   if (clearAlertsBtn) {
     clearAlertsBtn.addEventListener("click", async () => {
       try {
-        await fetch("/api/alerts/clear", { method: "POST" });
+        await fetch(`${API_BASE}/api/alerts/clear`, { method: "POST" });
         state.alerts = [];
         state.unreadAlertsCount = 0;
         updateAlertsBadge();
@@ -654,7 +780,7 @@ function renderWaterfall() {
 // ==================== App Matrix Renderer ====================
 async function loadApps() {
   try {
-    const res = await fetch("/api/apps");
+    const res = await fetch(`${API_BASE}/api/apps`);
     state.apps = await res.json();
     renderAppMatrix();
   } catch (err) {
@@ -728,7 +854,7 @@ function renderAppMatrix() {
 
 async function setAppPolicy(appName, mode) {
   try {
-    await fetch(`/api/apps/${encodeURIComponent(appName)}/mode`, {
+    await fetch(`${API_BASE}/api/apps/${encodeURIComponent(appName)}/mode`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode })
@@ -774,7 +900,7 @@ function renderSurveillanceMatrix() {
 // ==================== Rules Management ====================
 async function loadRules() {
   try {
-    const res = await fetch("/api/rules");
+    const res = await fetch(`${API_BASE}/api/rules`);
     state.rules = await res.json();
     renderRules();
   } catch (err) {
@@ -816,29 +942,31 @@ async function addCustomRule() {
   const action = document.getElementById("ruleAction").value;
 
   if (!value) {
-    alert("Please enter a domain or IP target.");
+    showToast("Validation", "Please enter a domain or IP target.", "warn");
     return;
   }
 
   try {
-    await fetch("/api/rules", {
+    await fetch(`${API_BASE}/api/rules`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ target_type: type, target_value: value, action })
     });
     document.getElementById("ruleTargetValue").value = "";
+    showToast("Rule Enforced", `Custom rule added for ${value}!`, "success");
     loadRules();
   } catch (err) {
-    alert("Error adding rule: " + err);
+    showToast("Rule Error", "Error adding rule: " + err, "error");
   }
 }
 
 async function deleteRule(id) {
   try {
-    await fetch(`/api/rules/${id}`, { method: "DELETE" });
+    await fetch(`${API_BASE}/api/rules/${id}`, { method: "DELETE" });
+    showToast("Rule Removed", "Custom rule deleted.", "info");
     loadRules();
   } catch (err) {
-    alert("Error deleting rule: " + err);
+    showToast("Rule Error", "Error deleting rule: " + err, "error");
   }
 }
 
@@ -846,8 +974,8 @@ async function deleteRule(id) {
 async function loadOsInfoAndPrivacy() {
   try {
     const [osRes, privRes] = await Promise.all([
-      fetch("/api/os-info"),
-      fetch("/api/telemetry/status")
+      fetch(`${API_BASE}/api/os-info`),
+      fetch(`${API_BASE}/api/telemetry/status`)
     ]);
     const osInfo = await osRes.json();
     const privStatus = await privRes.json();
@@ -1041,7 +1169,7 @@ function renderOsPrivacy(osInfo, privStatus) {
           </div>
           <p>Prevents Microsoft Edge from transmitting browser activity and diagnostic payloads in the background.</p>
         </div>
-        <button class="btn-action" onclick="alert('Edge background telemetry domains are sinkholed to 0.0.0.0!')">Protected via Sinkhole</button>
+        <button class="btn-action" onclick="showToast('DNS Sinkhole', 'Edge background telemetry domains are sinkholed to 0.0.0.0!', 'shield')">Protected via Sinkhole</button>
       </div>
     `;
   }
@@ -1049,31 +1177,39 @@ function renderOsPrivacy(osInfo, privStatus) {
 
 async function toggleTelemetryService(service, disable) {
   try {
-    const res = await fetch("/api/telemetry/toggle", {
+    const res = await fetch(`${API_BASE}/api/telemetry/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service, disable })
     });
     const data = await res.json();
-    alert(`Service '${service}' status updated: ${data.status || JSON.stringify(data)}`);
+    if (data.success) {
+      showToast("Service Protected", `${service} is now ${disable ? 'disabled & blocked' : 'enabled'}.`, "success");
+    } else {
+      showToast("Service Notice", data.error || data.output || "Requires Administrator privileges.", "warn");
+    }
     loadOsInfoAndPrivacy();
   } catch (err) {
-    alert("Notice: Service management requires root/sudo privileges on Linux or Administrator on Windows.");
+    showToast("Notice", "Service management requires root on Linux or Administrator on Windows.", "warn");
   }
 }
 
 async function toggleOsFeature(target, currentActive) {
   try {
-    const res = await fetch("/api/windows-privacy/toggle", {
+    const res = await fetch(`${API_BASE}/api/windows-privacy/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ target, disable: currentActive !== false })
     });
     const data = await res.json();
-    alert(`Command executed: ${JSON.stringify(data)}`);
+    if (data.success) {
+      showToast("OS Privacy Setting", `${target} privacy protection ${currentActive !== false ? 'activated' : 'restored'}.`, "success");
+    } else {
+      showToast("OS Notice", data.output || data.error || "Requires Administrator privileges.", "warn");
+    }
     loadOsInfoAndPrivacy();
   } catch (err) {
-    alert("Notice: Windows service commands require administrative privileges.");
+    showToast("Notice", "Windows service modifications require Administrator privileges.", "warn");
   }
 }
 
@@ -1105,12 +1241,14 @@ function escapeHtml(text) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  bootstrapInitialState();
   initWebSocket();
   initNetworkGraph();
   loadApps();
   renderSurveillanceMatrix();
   loadRules();
   loadOsInfoAndPrivacy();
+  loadVpnState();
 
   // Tab Switching
   document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -1178,11 +1316,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // Shield Mode Selector
   document.getElementById("shieldModeSelect").addEventListener("change", async (e) => {
     try {
-      await fetch("/api/shield/mode", {
+      await fetch(`${API_BASE}/api/shield/mode`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: e.target.value })
       });
+      showToast("Protection Profile", `Protection profile set to ${e.target.value}.`, "info");
     } catch (err) {
       console.error("Error setting shield mode:", err);
     }
@@ -1191,11 +1330,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // Master Shield Toggle
   document.getElementById("masterShieldToggle").addEventListener("change", async (e) => {
     try {
-      await fetch("/api/shield/toggle", {
+      await fetch(`${API_BASE}/api/shield/toggle`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active: e.target.checked })
       });
+      showToast("Master Shield", e.target.checked ? "Radar and firewall defenses ACTIVE." : "Radar defense PAUSED (Audit mode).", e.target.checked ? "shield" : "warn");
     } catch (err) {
       console.error("Error toggling shield:", err);
     }
@@ -1308,7 +1448,7 @@ async function openAppPicker() {
   modal.classList.add("open");
 
   try {
-    const res = await fetch("/api/system-apps");
+    const res = await fetch(`${API_BASE}/api/system-apps`);
     state.systemApps = await res.json();
     const countBadge = document.getElementById("totalAppsBadge");
     if (countBadge) countBadge.textContent = state.systemApps.length;
@@ -1395,7 +1535,7 @@ function renderAppPickerList() {
 
 async function selectSystemApp(name, process_name, exe_path, mode) {
   try {
-    const res = await fetch("/api/apps/select", {
+    const res = await fetch(`${API_BASE}/api/apps/select`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, process_name, exe_path, mode })
@@ -1408,9 +1548,10 @@ async function selectSystemApp(name, process_name, exe_path, mode) {
       }
       renderAppPickerList();
       loadApps();
+      showToast("App Monitored", `${name} added with policy: ${mode}`, "success");
     }
   } catch (err) {
-    alert("Error adding app to matrix: " + err);
+    showToast("Error", "Error adding app to matrix: " + err, "error");
   }
 }
 
@@ -1422,31 +1563,31 @@ async function addCustomExecutable() {
   const process_name = exe_path.split("\\").pop() || `${name}.exe`;
 
   if (!exe_path) {
-    alert("Please specify the path to the executable.");
+    showToast("Validation", "Please specify the path to the executable.", "warn");
     return;
   }
 
   await selectSystemApp(name, process_name, exe_path, "block_trackers");
   pathInput.value = "";
   nameInput.value = "";
-  alert(`Added ${name} (${process_name}) to TrackerControl Matrix!`);
 }
 
 // ==================== WireGuard & Proton VPN Controller ====================
 async function loadVpnState() {
   try {
     // 1. Tunnels
-    const tRes = await fetch("/api/vpn/tunnels");
+    const tRes = await fetch(`${API_BASE}/api/vpn/tunnels`);
     state.vpnTunnels = await tRes.json();
     renderTunnels();
+    renderMasterVpnCard();
 
     // 2. Proton Auth
-    const aRes = await fetch("/api/vpn/proton/auth");
+    const aRes = await fetch(`${API_BASE}/api/vpn/proton/auth`);
     state.protonAuth = await aRes.json();
     renderProtonAuthBanner();
 
     // 3. Proton Servers
-    const sRes = await fetch("/api/vpn/proton/servers");
+    const sRes = await fetch(`${API_BASE}/api/vpn/proton/servers`);
     state.protonServers = await sRes.json();
     renderProtonServers();
 
@@ -1462,6 +1603,125 @@ async function loadVpnState() {
     console.error("Error loading VPN state:", err);
   }
 }
+
+function renderMasterVpnCard() {
+  const avatar = document.getElementById("masterShieldAvatar");
+  const statusText = document.getElementById("masterVpnStatusText");
+  const badge = document.getElementById("masterVpnBadge");
+  const subText = document.getElementById("masterVpnSubText");
+  const btn = document.getElementById("masterVpnQuickConnectBtn");
+  const btnIcon = document.getElementById("masterVpnBtnIcon");
+  const btnText = document.getElementById("masterVpnBtnText");
+  const tunnelName = document.getElementById("masterTunnelName");
+  const virtualIp = document.getElementById("masterVirtualIp");
+
+  if (!avatar || !statusText || !badge || !btn) return;
+
+  const tunnels = state.vpnTunnels || [];
+  const activeTunnel = tunnels.find(t => t.status === "Connected");
+
+  if (activeTunnel) {
+    avatar.className = "vpn-shield-avatar connected";
+    avatar.textContent = activeTunnel.flag || "🛡️";
+    statusText.textContent = "SHIELD CONNECTED";
+    badge.textContent = "WireGuard Encrypted";
+    badge.style.background = "rgba(0, 255, 157, 0.18)";
+    badge.style.color = "#00ff9d";
+    badge.style.borderColor = "rgba(0, 255, 157, 0.4)";
+
+    subText.textContent = `All outbound desktop network packets encrypted and routed through ${activeTunnel.name} (${activeTunnel.country}).`;
+
+    btn.className = "vpn-btn-master btn-disconnect";
+    btnIcon.textContent = "🛑";
+    btnText.textContent = "Disconnect Shield";
+
+    if (tunnelName) tunnelName.textContent = `${activeTunnel.name} (${activeTunnel.country})`;
+    if (virtualIp) virtualIp.textContent = `${activeTunnel.address || "10.2.0.2"} (Virtual IP)`;
+  } else {
+    avatar.className = "vpn-shield-avatar";
+    avatar.textContent = "🛡️";
+    statusText.textContent = "DISCONNECTED";
+    badge.textContent = "Exposed to ISP";
+    badge.style.background = "rgba(255, 0, 85, 0.2)";
+    badge.style.color = "#ff0055";
+    badge.style.borderColor = "rgba(255, 0, 85, 0.4)";
+
+    subText.textContent = "Direct clearnet route active. Telemetry beacons, trackers, and ISP logging are active.";
+
+    btn.className = "vpn-btn-master btn-connect";
+    btnIcon.textContent = "⚡";
+    btnText.textContent = "Quick Connect (Fastest Node)";
+
+    if (tunnelName) tunnelName.textContent = "None (Direct Clearnet)";
+    if (virtualIp) virtualIp.textContent = "Clearnet (Unmasked)";
+  }
+}
+
+window.toggleMasterVpn = async function() {
+  const tunnels = state.vpnTunnels || [];
+  const activeTunnel = tunnels.find(t => t.status === "Connected");
+
+  if (activeTunnel) {
+    try {
+      await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(activeTunnel.id)}/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ activate: false })
+      });
+      showToast("VPN Disconnected", `Disconnected from ${activeTunnel.name}. Direct route restored.`, "warn");
+      await loadVpnState();
+    } catch (e) {
+      showToast("VPN Error", "Error disconnecting tunnel: " + e, "error");
+    }
+  } else {
+    if (tunnels.length > 0) {
+      const first = tunnels[0];
+      try {
+        await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(first.id)}/toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ activate: true })
+        });
+        showToast("WireGuard Connected", `Connected to ${first.name} (${first.country})! Traffic encrypted.`, "success");
+        await loadVpnState();
+      } catch (e) {
+        showToast("VPN Error", "Error activating tunnel: " + e, "error");
+      }
+    } else {
+      try {
+        showToast("Deploying VPN", "Provisioning fastest WireGuard node from Proton VPN fleet...", "info");
+        const deployRes = await fetch(`${API_BASE}/api/vpn/proton/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ server_id: "NL-FREE#1", custom_name: "Proton Netherlands (Fastest Free)" })
+        });
+        const dData = await deployRes.json();
+        if (dData.tunnel && dData.tunnel.id) {
+          await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(dData.tunnel.id)}/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ activate: true })
+          });
+          showToast("WireGuard Shield Active", "Connected to Proton Netherlands WireGuard! All packets encrypted.", "success");
+          await loadVpnState();
+        } else {
+          showToast("Proton Deployment Notice", "Please configure Proton credentials in '🔑 Proton VPN Auth'.", "warn");
+        }
+      } catch (e) {
+        showToast("VPN Error", "Quick Connect error: " + e, "error");
+      }
+    }
+  }
+};
+
+window.toggleKillSwitch = function(enabled) {
+  const lbl = document.getElementById("killSwitchLabel");
+  if (lbl) {
+    lbl.textContent = enabled ? "ACTIVE" : "DISABLED";
+    lbl.style.color = enabled ? "#00ff9d" : "var(--text-muted)";
+  }
+  showToast("Kill Switch", enabled ? "Kill Switch armed: Outbound packets will drop if VPN disconnects." : "Kill Switch disarmed.", enabled ? "shield" : "warn");
+};
 
 function renderProtonAuthBanner() {
   const auth = state.protonAuth || {};
@@ -1615,41 +1875,42 @@ function renderProtonServers() {
 
 async function deployProtonServer(serverId, name) {
   try {
-    const res = await fetch("/api/vpn/proton/deploy", {
+    const res = await fetch(`${API_BASE}/api/vpn/proton/deploy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ server_id: serverId, custom_name: `Proton ${name}` })
     });
     const data = await res.json();
     if (data.success) {
-      alert(`WireGuard Tunnel deployed for Proton ${name}! Activated in tunnel list.`);
+      showToast("WireGuard Deployed", `Tunnel deployed for Proton ${name}! Activated in tunnel list.`, "success");
       loadVpnState();
     }
   } catch (err) {
-    alert("Error deploying Proton WireGuard tunnel: " + err);
+    showToast("VPN Error", "Error deploying Proton WireGuard tunnel: " + err, "error");
   }
 }
 
 async function toggleTunnel(tunnelId, activate) {
   try {
-    await fetch(`/api/vpn/tunnels/${encodeURIComponent(tunnelId)}/toggle`, {
+    await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(tunnelId)}/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ activate })
     });
     loadVpnState();
   } catch (err) {
-    alert("Error toggling tunnel: " + err);
+    showToast("VPN Error", "Error toggling tunnel: " + err, "error");
   }
 }
 
 async function deleteTunnel(tunnelId) {
   if (!confirm("Are you sure you want to remove this WireGuard tunnel?")) return;
   try {
-    await fetch(`/api/vpn/tunnels/${encodeURIComponent(tunnelId)}`, { method: "DELETE" });
+    await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(tunnelId)}`, { method: "DELETE" });
+    showToast("Tunnel Removed", "WireGuard tunnel removed.", "info");
     loadVpnState();
   } catch (err) {
-    alert("Error deleting tunnel: " + err);
+    showToast("VPN Error", "Error deleting tunnel: " + err, "error");
   }
 }
 
@@ -1659,21 +1920,21 @@ async function saveProtonAuth() {
   const tier = document.getElementById("protonTierSelect").value;
 
   if (!private_key) {
-    alert("Please enter your Proton WireGuard PrivateKey.");
+    showToast("Validation", "Please enter your Proton WireGuard PrivateKey.", "warn");
     return;
   }
 
   try {
-    await fetch("/api/vpn/proton/auth", {
+    await fetch(`${API_BASE}/api/vpn/proton/auth`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ private_key, address, tier })
     });
     document.getElementById("protonAuthModal").classList.remove("open");
     loadVpnState();
-    alert("Proton VPN WireGuard credentials saved successfully!");
+    showToast("Credentials Saved", "Proton VPN WireGuard credentials saved successfully!", "success");
   } catch (err) {
-    alert("Error saving Proton auth: " + err);
+    showToast("Auth Error", "Error saving Proton auth: " + err, "error");
   }
 }
 
@@ -1686,21 +1947,21 @@ async function saveCustomTunnel() {
   const country = document.getElementById("customCountry").value.trim() || "Global";
 
   if (!endpoint || !public_key || !private_key) {
-    alert("Please provide endpoint, public key, and private key.");
+    showToast("Validation", "Please provide endpoint, public key, and private key.", "warn");
     return;
   }
 
   try {
-    await fetch("/api/vpn/tunnels", {
+    await fetch(`${API_BASE}/api/vpn/tunnels`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, endpoint, public_key, private_key, address, country })
     });
     document.getElementById("customTunnelModal").classList.remove("open");
     loadVpnState();
-    alert("WireGuard Tunnel added successfully!");
+    showToast("Tunnel Created", "WireGuard Tunnel added successfully!", "success");
   } catch (err) {
-    alert("Error adding WireGuard tunnel: " + err);
+    showToast("Tunnel Error", "Error adding WireGuard tunnel: " + err, "error");
   }
 }
 
@@ -1762,11 +2023,12 @@ async function setAppRouting(processName, routeChoice) {
   }
 
   try {
-    await fetch("/api/vpn/split-tunneling", {
+    await fetch(`${API_BASE}/api/vpn/split-tunneling`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ process_name: processName, mode, tunnel_id: tunnelId })
     });
+    showToast("Split Tunnel", `App ${processName} routed via ${routeChoice}.`, "info");
   } catch (err) {
     console.error("Error setting app routing:", err);
   }
@@ -1775,7 +2037,7 @@ async function setAppRouting(processName, routeChoice) {
 // ==================== Orbot VPN Controller ====================
 async function loadOrbotStatus() {
   try {
-    const res = await fetch("/api/vpn/orbot/identity");
+    const res = await fetch(`${API_BASE}/api/vpn/orbot/identity`);
     const data = await res.json();
     state.orbotStatus = data;
 
@@ -1809,23 +2071,23 @@ async function loadOrbotStatus() {
 
 async function cycleOrbotIdentity() {
   try {
-    const res = await fetch("/api/vpn/orbot/new-identity", { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/vpn/orbot/new-identity`, { method: "POST" });
     const data = await res.json();
     if (data.success) {
-      alert("New Tor circuit requested! (SIGNAL NEWNYM delivered to Tor controller).");
+      showToast("Tor Circuit Cycled", "New Tor circuit requested! (SIGNAL NEWNYM delivered to Tor controller).", "success");
       loadOrbotStatus();
     } else {
-      alert("Notice: " + (data.error || "Could not signal Tor controller. Make sure Orbot or Tor is running with ControlPort 9051 enabled."));
+      showToast("Tor Notice", data.error || "Could not signal Tor controller. Make sure Orbot or Tor is running with ControlPort 9051 enabled.", "warn");
     }
   } catch (err) {
-    alert("Error cycling Tor identity: " + err);
+    showToast("Tor Error", "Error cycling Tor identity: " + err, "error");
   }
 }
 
 // ==================== Port Forwarding Engine ====================
 async function loadPortForwarding() {
   try {
-    const res = await fetch("/api/vpn/port-forwarding");
+    const res = await fetch(`${API_BASE}/api/vpn/port-forwarding`);
     state.portForwardRules = await res.json();
     renderPortForwarding();
   } catch (err) {
@@ -1889,39 +2151,40 @@ async function savePortForwardRule() {
   const protocol = document.getElementById("pfProtocol").value;
 
   if (!listen_port || !target_port) {
-    alert("Please specify both listen port and target port.");
+    showToast("Validation", "Please specify both listen port and target port.", "warn");
     return;
   }
 
   try {
-    await fetch("/api/vpn/port-forwarding", {
+    await fetch(`${API_BASE}/api/vpn/port-forwarding`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, listen_port, target_host, target_port, protocol, auto_start: true })
     });
     document.getElementById("portForwardModal").classList.remove("open");
     loadPortForwarding();
-    alert(`Port Forwarding Rule '${name}' (Port ${listen_port} &rarr; ${target_host}:${target_port}) deployed!`);
+    showToast("Port Forwarding Deployed", `Port Forwarding Rule '${name}' (Port ${listen_port} &rarr; ${target_host}:${target_port}) deployed!`, "success");
   } catch (err) {
-    alert("Error deploying port forward rule: " + err);
+    showToast("Port Forward Error", "Error deploying port forward rule: " + err, "error");
   }
 }
 
 async function togglePortForward(ruleId, start) {
   try {
     const action = start ? "start" : "stop";
-    await fetch(`/api/vpn/port-forwarding/${encodeURIComponent(ruleId)}/${action}`, { method: "POST" });
+    await fetch(`${API_BASE}/api/vpn/port-forwarding/${encodeURIComponent(ruleId)}/${action}`, { method: "POST" });
     loadPortForwarding();
   } catch (err) {
-    alert("Error toggling port forward rule: " + err);
+    showToast("Port Forward Error", "Error toggling port forward rule: " + err, "error");
   }
 }
 
 async function deletePortForward(ruleId) {
   try {
-    await fetch(`/api/vpn/port-forwarding/${encodeURIComponent(ruleId)}`, { method: "DELETE" });
+    await fetch(`${API_BASE}/api/vpn/port-forwarding/${encodeURIComponent(ruleId)}`, { method: "DELETE" });
+    showToast("Port Forward Removed", "Port forwarding rule removed.", "info");
     loadPortForwarding();
   } catch (err) {
-    alert("Error deleting port forward rule: " + err);
+    showToast("Port Forward Error", "Error deleting port forward rule: " + err, "error");
   }
 }

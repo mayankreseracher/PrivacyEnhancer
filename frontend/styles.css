@@ -259,36 +259,47 @@ main {
 /* ==================== Navigation Tabs ==================== */
 .nav-tabs {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 24px;
-  overflow-x: auto;
+  padding-bottom: 8px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.nav-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-btn {
-  background: transparent;
-  border: none;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
   color: var(--text-muted);
-  padding: 12px 20px;
-  font-size: 0.95rem;
+  padding: 9px 16px;
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
   display: flex;
   align-items: center;
   gap: 8px;
-  transition: all 0.2s;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   white-space: nowrap;
 }
 
 .tab-btn:hover {
   color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
 }
 
 .tab-btn.active {
   color: var(--accent-cyan);
-  border-bottom-color: var(--accent-cyan);
-  background: rgba(0, 229, 255, 0.04);
+  background: rgba(0, 229, 255, 0.1);
+  border-color: rgba(0, 229, 255, 0.4);
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.15);
 }
 
 /* Tab Panels */
@@ -1178,4 +1189,276 @@ main {
   color: #ff0055;
   border: 1px solid rgba(255, 0, 85, 0.5);
 }
+
+/* ==================== Cyber Toast Notifications ==================== */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+  max-width: 440px;
+}
+
+.toast {
+  background: rgba(13, 17, 28, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 14px 18px;
+  color: #fff;
+  font-size: 0.85rem;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7), 0 0 20px rgba(0, 229, 255, 0.12);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  pointer-events: auto;
+  animation: toastSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.25s ease;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.toast.toast-fadeout {
+  opacity: 0;
+  transform: translateY(15px) scale(0.94);
+}
+
+.toast-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.toast-body {
+  flex: 1;
+}
+
+.toast-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-bottom: 3px;
+  color: #fff;
+}
+
+.toast-msg {
+  color: var(--text-muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.toast.toast-success {
+  border-left: 4px solid var(--accent-safe);
+}
+.toast.toast-success .toast-title {
+  color: var(--accent-safe);
+}
+
+.toast.toast-error {
+  border-left: 4px solid var(--accent-block);
+}
+.toast.toast-error .toast-title {
+  color: var(--accent-block);
+}
+
+.toast.toast-warn {
+  border-left: 4px solid var(--accent-warn);
+}
+.toast.toast-warn .toast-title {
+  color: var(--accent-warn);
+}
+
+.toast.toast-info {
+  border-left: 4px solid var(--accent-cyan);
+}
+.toast.toast-info .toast-title {
+  color: var(--accent-cyan);
+}
+
+.toast-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.toast-close:hover {
+  color: #fff;
+}
+
+/* ==================== High-Level VPN Master Connect Hero Card ==================== */
+.vpn-master-hero {
+  background: linear-gradient(135deg, rgba(14, 21, 37, 0.92) 0%, rgba(9, 13, 23, 0.96) 100%);
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 30px rgba(0, 229, 255, 0.08);
+  border-radius: 16px;
+  padding: 26px 32px;
+  margin-bottom: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.vpn-master-hero::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #00ff9d 0%, #00e5ff 50%, #9d4edd 100%);
+}
+
+.vpn-hero-grid {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.vpn-hero-status-group {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.vpn-shield-avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.2rem;
+  background: rgba(0, 229, 255, 0.1);
+  border: 2px solid rgba(0, 229, 255, 0.3);
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.2);
+  transition: all 0.3s ease;
+}
+
+.vpn-shield-avatar.connected {
+  background: rgba(0, 255, 157, 0.15);
+  border-color: #00ff9d;
+  box-shadow: 0 0 30px rgba(0, 255, 157, 0.4);
+  animation: shieldGlow 2.5s infinite;
+}
+
+@keyframes shieldGlow {
+  0% { box-shadow: 0 0 15px rgba(0, 255, 157, 0.3); }
+  50% { box-shadow: 0 0 35px rgba(0, 255, 157, 0.6); }
+  100% { box-shadow: 0 0 15px rgba(0, 255, 157, 0.3); }
+}
+
+.vpn-hero-title {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.3px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vpn-hero-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.vpn-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.vpn-btn-master {
+  padding: 14px 28px;
+  font-size: 1rem;
+  font-weight: 800;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border: none;
+}
+
+.vpn-btn-master.btn-connect {
+  background: linear-gradient(135deg, #00ff9d 0%, #00b4d8 100%);
+  color: #050a12;
+  box-shadow: 0 8px 24px rgba(0, 255, 157, 0.35);
+}
+
+.vpn-btn-master.btn-connect:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 12px 30px rgba(0, 255, 157, 0.55);
+}
+
+.vpn-btn-master.btn-disconnect {
+  background: linear-gradient(135deg, #ff0055 0%, #d90429 100%);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(255, 0, 85, 0.35);
+}
+
+.vpn-btn-master.btn-disconnect:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 12px 30px rgba(255, 0, 85, 0.55);
+}
+
+.vpn-telemetry-pills {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vpn-pill {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.vpn-pill-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.vpn-pill-val {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fff;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 

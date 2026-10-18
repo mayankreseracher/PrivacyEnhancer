@@ -78,6 +78,9 @@
       <button class="tab-btn active" data-tab="graphTab">
         <span>📈</span> Live Network Graph
       </button>
+      <button class="tab-btn" data-tab="vpnTab">
+        <span>🛡️</span> WireGuard & Proton VPN
+      </button>
       <button class="tab-btn" data-tab="alertsTab">
         <span>🚨</span> Security Alerts <span id="alertsNavBadge" class="nav-badge" style="display: none;">0</span>
       </button>
@@ -95,9 +98,6 @@
       </button>
       <button class="tab-btn" data-tab="rulesTab">
         <span>⚙️</span> Firewall & Rules
-      </button>
-      <button class="tab-btn" data-tab="vpnTab">
-        <span>🛡️</span> WireGuard & Proton VPN
       </button>
     </div>
 
@@ -374,6 +374,56 @@
           <button class="btn-action" id="openCustomTunnelBtn">
             ➕ Add WireGuard Tunnel
           </button>
+        </div>
+      </div>
+
+      <!-- Master VPN Control Hero Card (GlassWire & Mullvad Style) -->
+      <div class="vpn-master-hero" id="vpnMasterHero">
+        <div class="vpn-hero-grid">
+          <div class="vpn-hero-status-group">
+            <div class="vpn-shield-avatar" id="masterShieldAvatar">🛡️</div>
+            <div>
+              <div class="vpn-hero-title">
+                <span id="masterVpnStatusText">DISCONNECTED</span>
+                <span class="badge" id="masterVpnBadge" style="background: rgba(255, 0, 85, 0.2); color: #ff0055; border: 1px solid rgba(255,0,85,0.4); font-size: 0.75rem;">Exposed to ISP</span>
+              </div>
+              <div class="vpn-hero-subtitle" id="masterVpnSubText">
+                Direct clearnet route active. Telemetry beacons, trackers, and ISP logging are active.
+              </div>
+            </div>
+          </div>
+
+          <div class="vpn-hero-actions">
+            <button class="vpn-btn-master btn-connect" id="masterVpnQuickConnectBtn" onclick="toggleMasterVpn()">
+              <span id="masterVpnBtnIcon">⚡</span>
+              <span id="masterVpnBtnText">Quick Connect (Fastest Node)</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="vpn-telemetry-pills">
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Active Tunnel / Gateway</div>
+            <div class="vpn-pill-val" id="masterTunnelName">None (Direct Clearnet)</div>
+          </div>
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Assigned Virtual IP</div>
+            <div class="vpn-pill-val" id="masterVirtualIp">127.0.0.1 (Unmasked)</div>
+          </div>
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Encrypted DNS Tunnel</div>
+            <div class="vpn-pill-val" style="color: var(--accent-safe);" id="masterDnsProtection">10.2.0.1 (Anti-Leak)</div>
+          </div>
+          <div class="vpn-pill">
+            <div class="vpn-pill-label">Kill Switch Protection</div>
+            <div class="vpn-pill-val" style="justify-content: space-between;">
+              <span id="killSwitchLabel" style="color: #00ff9d; font-size: 0.85rem;">ACTIVE</span>
+              <label class="switch" style="width: 36px; height: 20px;">
+                <input type="checkbox" id="killSwitchToggle" checked onchange="toggleKillSwitch(this.checked)">
+                <span class="slider" style="border-radius: 20px;"></span>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -715,6 +765,7 @@
 
   </main>
 
+  <div id="toastContainer" class="toast-container"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

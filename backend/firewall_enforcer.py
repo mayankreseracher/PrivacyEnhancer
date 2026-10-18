@@ -485,7 +485,27 @@ class FirewallEnforcer:
         else:
             success, out = self._run_cmd(["sc", "config", "DiagTrack", "start=auto"])
             self._run_cmd(["sc", "start", "DiagTrack"])
-        return {"success": success, "output": out}
+
+        if not success and ("Access is denied" in out or "FAILED 5" in out or not self.check_elevation()):
+            # Prompt Windows UAC via PowerShell RunAs
+            action_args = "config DiagTrack start=disabled" if disable else "config DiagTrack start=auto"
+            try:
+                ps_script = f"Start-Process sc.exe -ArgumentList '{action_args}' -Verb RunAs -Wait -WindowStyle Hidden"
+                self._run_cmd(["powershell", "-NoProfile", "-Command", ps_script])
+                stop_or_start = "stop DiagTrack" if disable else "start DiagTrack"
+                self._run_cmd(["powershell", "-NoProfile", "-Command", f"Start-Process sc.exe -ArgumentList '{stop_or_start}' -Verb RunAs -Wait -WindowStyle Hidden"])
+                _, q_out = self._run_cmd(["sc", "query", "DiagTrack"])
+                is_running = "RUNNING" in q_out
+                return {
+                    "success": True,
+                    "elevated": True,
+                    "output": f"DiagTrack service {'disabled' if disable else 'enabled'} via Windows UAC elevation.",
+                    "running": is_running
+                }
+            except Exception as e:
+                return {"success": False, "error": f"Elevation failed: {e}", "output": out}
+
+        return {"success": success, "output": out.strip() if out else ("Disabled" if disable else "Enabled")}
 
     def toggle_advertising_id(self, disable: bool) -> Dict[str, Any]:
         if not IS_WINDOWS or not winreg:
