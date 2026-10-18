@@ -78,7 +78,6 @@ class TrackerEngine:
 
         self._dns_task = None
         self._monitor_task = None
-        self._monitor_task = None
 
     def on_event(self, event: Dict[str, Any]):
         """Called whenever DNS Proxy or Process Monitor records a network connection."""

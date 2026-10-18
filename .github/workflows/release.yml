@@ -81,6 +81,7 @@ jobs:
           name: TrackerControl-Linux-x86_64
           path: |
             dist/linux/*.deb
+            dist/linux/*.rpm
             dist/linux/*.tar.gz
             dist/linux/trackercontrol-linux
 
@@ -113,6 +114,7 @@ jobs:
           name: TrackerControl-macOS-Universal
           path: |
             dist/macos/*.tar.gz
+            dist/macos/*.zip
             dist/macos/*.dmg
 
   publish-release:

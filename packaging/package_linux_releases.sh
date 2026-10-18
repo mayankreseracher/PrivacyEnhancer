@@ -196,6 +196,12 @@ else
     echo -e "${CYAN}✓ AppDir created at ${APPDIR}. Packaged in tarball and .deb.${RESET}"
 fi
 
+# ==================== 4. RedHat / Fedora / openSUSE RPM (.rpm) ====================
+echo -e "\n${CYAN}[4/4] Building Fedora/RHEL/openSUSE RPM Package (.rpm)...${RESET}"
+if [ -f "${SCRIPT_DIR}/rpm/build_rpm.py" ]; then
+    python3 "${SCRIPT_DIR}/rpm/build_rpm.py" || true
+fi
+
 echo -e "\n${GREEN}${BOLD}========================================================================${RESET}"
 echo -e "${GREEN}${BOLD}  ✓ ALL LINUX RELEASE PACKAGES GENERATED SUCCESSFULLY!${RESET}"
 echo -e "${GREEN}${BOLD}========================================================================${RESET}"

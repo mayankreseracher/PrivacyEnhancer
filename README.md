@@ -38,9 +38,11 @@ Pre-built standalone releases with bundled Python runtime, threat database, and 
 |---|---|---|---|
 | **Windows 10 / 11** | Standalone Executable | [`TrackerControl-PC.exe`](dist/TrackerControl-PC.exe) | Single-file portable executable (17.4 MB) |
 | **Windows 10 / 11** | Release ZIP | [`TrackerControl-PC-v1.0.0-Windows-x64.zip`](dist/TrackerControl-PC-v1.0.0-Windows-x64.zip) | Portable bundle with batch launcher (17.2 MB) |
-| **macOS (Intel & Apple Silicon)** | App Bundle & Archive | [`TrackerControl-v1.0.0-macOS-universal.tar.gz`](dist/macos/TrackerControl-v1.0.0-macOS-universal.tar.gz) | Standalone `.app` bundle with launcher script |
+| **macOS (Intel & Apple Silicon)** | App Bundle & Archive | [`TrackerControl-v1.0.0-macOS-universal.tar.gz`](dist/macos/TrackerControl-v1.0.0-macOS-universal.tar.gz) | Standalone `.app` bundle with launcher script (140 KB) |
+| **macOS (Intel & Apple Silicon)** | Universal Release ZIP | [`TrackerControl-v1.0.0-macOS-universal.zip`](dist/macos/TrackerControl-v1.0.0-macOS-universal.zip) | Complete `.app` bundle with installer script (153 KB) |
 | **macOS (Homebrew)** | Homebrew Cask | [`packaging/macos/trackercontrol.rb`](packaging/macos/trackercontrol.rb) | `brew install --cask trackercontrol.rb` |
 | **Debian / Ubuntu / Mint** | Native `.deb` | [`trackercontrol_1.0.0_amd64.deb`](dist/linux/trackercontrol_1.0.0_amd64.deb) | Native Debian package with systemd & desktop integration (19.5 MB) |
+| **Fedora / RHEL / openSUSE** | Native `.rpm` | [`trackercontrol-1.0.0-1.x86_64.rpm`](dist/linux/trackercontrol-1.0.0-1.x86_64.rpm) | Native RPM package with systemd & desktop integration (19.5 MB) |
 | **Universal Linux** | Standalone Binary | [`trackercontrol-linux`](dist/linux/trackercontrol-linux) | Native 64-bit ELF standalone executable (19.7 MB) |
 | **Universal Linux** | Portable Tarball | [`trackercontrol-v1.0.0-linux-x86_64.tar.gz`](dist/linux/trackercontrol-v1.0.0-linux-x86_64.tar.gz) | Complete bundle with `install.sh` and `uninstall.sh` (19.5 MB) |
 | **Arch Linux / Manjaro** | PKGBUILD | [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) | AUR / Arch build recipe |
@@ -122,14 +124,22 @@ sudo dpkg -i dist/linux/trackercontrol_1.0.0_amd64.deb
 sudo trackercontrol
 ```
 
-#### 2. Universal Standalone Tarball (Any Linux Distro)
+#### 2. Fedora / RHEL / openSUSE / Rocky Linux (`.rpm`)
+```bash
+sudo rpm -i dist/linux/trackercontrol-1.0.0-1.x86_64.rpm
+# Or with dnf / zypper:
+sudo dnf install dist/linux/trackercontrol-1.0.0-1.x86_64.rpm
+sudo trackercontrol
+```
+
+#### 3. Universal Standalone Tarball (Any Linux Distro)
 ```bash
 tar -xzf dist/linux/trackercontrol-v1.0.0-linux-x86_64.tar.gz
 cd trackercontrol-1.0.0
 sudo ./install.sh
 ```
 
-#### 3. Standalone Binary Launch
+#### 4. Standalone Binary Launch
 ```bash
 chmod +x dist/linux/trackercontrol-linux
 sudo ./dist/linux/trackercontrol-linux
