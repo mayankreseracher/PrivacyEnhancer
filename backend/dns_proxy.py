@@ -47,6 +47,9 @@ class DNSProxy:
         self.original_dns_settings: Dict[str, Any] = {}
         self.dns_configured: bool = False
 
+        # Optional ProcessMonitor reference for DNS client attribution (set by engine)
+        self.process_monitor = None
+
     def get_domain_for_ip(self, ip: str) -> Optional[str]:
         return self.ip_to_domain_cache.get(ip)
 
@@ -79,6 +82,27 @@ class DNSProxy:
 
             should_block = (is_tracker or custom_block) and not custom_allow
 
+            # Attempt to attribute DNS request to originating process via ProcessMonitor
+            pid = None
+            process_name = "DNS Client"
+            exe_path = ""
+            try:
+                client_ip = client_addr[0] if isinstance(client_addr, (tuple, list)) and len(client_addr) > 0 else None
+                client_port = client_addr[1] if isinstance(client_addr, (tuple, list)) and len(client_addr) > 1 else None
+                if client_ip and client_port and hasattr(self, "process_monitor") and self.process_monitor:
+                    loop = asyncio.get_running_loop()
+                    finder = lambda: self.process_monitor.find_process_for_endpoint(client_ip, client_port)
+                    proc = await loop.run_in_executor(None, finder)
+                    if proc:
+                        pid = proc.get("pid")
+                        process_name = proc.get("process_name") or process_name
+                        exe_path = proc.get("exe_path") or exe_path
+            except Exception:
+                # Attribution best-effort only; fall back to DNS Client placeholders
+                pid = None
+                process_name = "DNS Client"
+                exe_path = ""
+
             # If blocked: generate sinkhole response (0.0.0.0 / ::) or NXDOMAIN
             if should_block:
                 if qtype == "A" or qtype_code == 1:
@@ -102,14 +126,11 @@ class DNSProxy:
                         q=request.q
                     )
 
-                # TODO: Attribution limitation - DNS requests currently log pid: None and process_name: 'DNS Client'.
-                # Correlating client_addr ephemeral port with active OS sockets via ProcessMonitor would allow
-                # identifying the true originating PID and application executable for each DNS query.
                 event = {
                     "timestamp": time.time(),
-                    "pid": None,
-                    "process_name": "DNS Client",
-                    "exe_path": "",
+                    "pid": pid,
+                    "process_name": process_name,
+                    "exe_path": exe_path,
                     "domain": qname,
                     "ip": "0.0.0.0",
                     "port": 53,
@@ -143,14 +164,11 @@ class DNSProxy:
                 except Exception:
                     pass
 
-                # TODO: Attribution limitation - DNS requests currently log pid: None and process_name: 'DNS Client'.
-                # Correlating client_addr ephemeral port with active OS sockets via ProcessMonitor would allow
-                # identifying the true originating PID and application executable for each DNS query.
                 event = {
                     "timestamp": time.time(),
-                    "pid": None,
-                    "process_name": "DNS Client",
-                    "exe_path": "",
+                    "pid": pid,
+                    "process_name": process_name,
+                    "exe_path": exe_path,
                     "domain": qname,
                     "ip": self.domain_to_ip_cache.get(qname, "Resolved"),
                     "port": 53,
