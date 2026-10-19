@@ -18,7 +18,7 @@ from .platform_helper import PlatformHelper
 
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
-app = FastAPI(title="TrackerControl PC", version="1.0.5")
+app = FastAPI(title="TrackerControl PC", version="1.0.6")
 
 # Enable CORS (allow all origins with credentials=False for security)
 app.add_middleware(
@@ -45,9 +45,22 @@ async def shutdown_event():
 async def websocket_endpoint(websocket: WebSocket):
     await engine.register_websocket(websocket)
     try:
+        import json, time
         while True:
-            # Keep alive and listen for client commands
+            # Keep alive and listen for client commands / heartbeats
             data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                mtype = msg.get("type")
+                if mtype == "PING":
+                    await websocket.send_text(json.dumps({
+                        "type": "PONG",
+                        "timestamp": time.time(),
+                        "client_ts": msg.get("timestamp")
+                    }))
+            except Exception:
+                if data.strip().lower() == "ping":
+                    await websocket.send_text("pong")
     except WebSocketDisconnect:
         engine.unregister_websocket(websocket)
     except Exception:
@@ -287,7 +300,10 @@ class DeployProtonTunnelRequest(BaseModel):
 
 @app.post("/api/vpn/proton/deploy")
 async def deploy_proton_server(payload: DeployProtonTunnelRequest):
-    wg_conf = engine.proton.generate_wireguard_config(payload.server_id)
+    # Derive unique virtual subnet IP for each tunnel (e.g. 10.2.0.2, 10.2.1.2)
+    existing_count = len(engine.wireguard.tunnels)
+    unique_ip = f"10.2.{existing_count}.2/32"
+    wg_conf = engine.proton.generate_wireguard_config(payload.server_id, custom_address=unique_ip)
     name = payload.custom_name or f"Proton {wg_conf['server_name']}"
     
     tunnel = engine.wireguard.add_tunnel(
@@ -296,6 +312,7 @@ async def deploy_proton_server(payload: DeployProtonTunnelRequest):
         endpoint=wg_conf["endpoint"],
         public_key=wg_conf["public_key"],
         private_key=engine.proton.auth_data.get("private_key", "CLIENT_PRIVATE_KEY_HERE"),
+        address=unique_ip,
         country=wg_conf["country"],
         flag=wg_conf["flag"],
         conf_content=wg_conf["conf_content"]
@@ -310,6 +327,54 @@ class BindAppRequest(BaseModel):
 async def bind_app_tunnel(payload: BindAppRequest):
     res = engine.wireguard.bind_app_to_tunnel(payload.process_name, payload.tunnel_id)
     return res
+
+@app.get("/api/vpn/bindings")
+async def get_vpn_app_bindings():
+    """Returns matrix of all apps bound to specific VPN tunnels."""
+    return engine.wireguard.get_all_bindings()
+
+class LaunchAppVpnRequest(BaseModel):
+    process_name: str
+    exe_path: Optional[str] = None
+    tunnel_id: Optional[str] = None
+
+@app.post("/api/vpn/launch-app")
+async def launch_app_with_vpn(payload: LaunchAppVpnRequest):
+    """Launches an application with proxy routing flags if bound to a VPN tunnel."""
+    import subprocess
+    proc_name = payload.process_name.lower().strip()
+    tunnel_id = payload.tunnel_id or engine.wireguard.app_bindings.get(proc_name)
+    exe_path = payload.exe_path
+
+    # Try resolving exe_path from system apps if not supplied
+    if not exe_path:
+        sys_apps = engine.app_discovery.get_all_system_apps(query=proc_name)
+        for sa in sys_apps:
+            if sa.get("process_name", "").lower() == proc_name:
+                exe_path = sa.get("exe_path")
+                break
+
+    if not exe_path or not os.path.exists(exe_path):
+        return {"success": False, "error": f"Executable not found on system for '{payload.process_name}'"}
+
+    tunnel_info = engine.wireguard.tunnels.get(tunnel_id) if tunnel_id in engine.wireguard.tunnels else None
+    proxy_url = tunnel_info.get("proxy_url") if tunnel_info else ("socks5://127.0.0.1:9050" if tunnel_id == "orbot" else None)
+
+    cmd = [exe_path]
+    if proxy_url:
+        cmd.append(f"--proxy-server={proxy_url}")
+
+    try:
+        proc = subprocess.Popen(cmd)
+        return {
+            "success": True,
+            "pid": proc.pid,
+            "app": payload.process_name,
+            "tunnel": tunnel_info.get("name") if tunnel_info else ("Orbot / Tor" if tunnel_id == "orbot" else "Direct"),
+            "proxy_url": proxy_url
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # ==================== Orbot VPN Endpoints ====================
 
@@ -450,7 +515,7 @@ async def export_csv():
 async def get_updater_status():
     if hasattr(engine, "updater") and engine.updater:
         return engine.updater.get_status()
-    return {"status": "disabled", "current_version": "1.0.5"}
+    return {"status": "disabled", "current_version": "1.0.6"}
 
 @app.post("/api/updater/check")
 async def check_for_updates():
@@ -483,6 +548,31 @@ async def update_updater_settings(payload: UpdaterSettingsRequest):
             engine.updater.set_check_interval_hours(payload.interval_hours)
         return {"success": True, "settings": engine.updater.get_status()}
     return {"success": False, "error": "Updater not initialized"}
+
+# ==================== System & Background Service Endpoints ====================
+
+@app.get("/api/system/status")
+async def get_system_service_status():
+    return {
+        "status": "online",
+        "version": "1.0.6",
+        "persistent_background_mode": True,
+        "shield_active": engine.shield_active,
+        "protection_mode": engine.protection_mode,
+        "active_tunnels": len([t for t in engine.wireguard.get_all_tunnels() if t.get("status") == "Connected"]),
+        "platform": PlatformHelper.get_system_summary()
+    }
+
+@app.post("/api/system/quit")
+async def quit_system():
+    """Explicitly stops all services, restores DNS/firewall, and terminates application."""
+    import asyncio
+    async def _delayed_shutdown():
+        await asyncio.sleep(0.5)
+        await engine.stop()
+        os._exit(0)
+    asyncio.create_task(_delayed_shutdown())
+    return {"success": True, "message": "TrackerControl PC is shutting down gracefully."}
 
 # Static Dashboard
 @app.get("/")

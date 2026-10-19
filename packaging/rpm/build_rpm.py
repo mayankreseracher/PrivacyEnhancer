@@ -339,9 +339,10 @@ def main():
         {"path": "/lib/systemd/system/trackercontrol.service", "content": service_content, "mode": 0o100644},
     ]
     
+    version = os.environ.get("VERSION", "1.0.6").lstrip("v")
     metadata = {
         "name": "trackercontrol",
-        "version": "1.0.0",
+        "version": version,
         "release": "1",
         "summary": "Sovereign Desktop Privacy Guard, Multi-Tunnel WireGuard & Orbot Tor Firewall",
         "description": "TrackerControl PC is a specialized desktop privacy guard providing sub-second network attribution, DNS sinkholing, multi-tunnel WireGuard concurrency, Proton VPN server integration, Tor/Orbot routing, and OS telemetry suppression.",
@@ -349,7 +350,7 @@ def main():
         "url": "https://github.com/mayankreseracher/PrivacyEnhancer"
     }
     
-    output_path = os.path.join(root, "dist/linux/trackercontrol-1.0.0-1.x86_64.rpm")
+    output_path = os.path.join(root, f"dist/linux/trackercontrol-{version}-1.x86_64.rpm")
     build_rpm_package(files, metadata, output_path)
 
 

@@ -14,6 +14,8 @@ import psutil
 from typing import Dict, Any, List, Optional
 
 from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS, PlatformHelper
+from .socks5_gateway import MultiVpnProxyManager
+from .proton_service import VERIFIED_PROTON_SERVERS, ProtonService
 
 DATA_DIR = PlatformHelper.get_data_dir()
 CONFIGS_DIR = os.path.join(DATA_DIR, "wireguard_configs")
@@ -28,6 +30,7 @@ class WireGuardManager:
         self.tunnels: Dict[str, Dict[str, Any]] = {}
         self.app_bindings: Dict[str, str] = {} # process_name.lower() -> tunnel_id
         self.last_io_snapshot: Dict[str, Dict[str, Any]] = {}
+        self.proxy_manager = MultiVpnProxyManager()
         self.load_state()
 
     def load_state(self):
@@ -99,8 +102,11 @@ class WireGuardManager:
         now = time.time()
         result = []
 
-        for tid, t in self.tunnels.items():
+        for idx, (tid, t) in enumerate(self.tunnels.items()):
             t_copy = dict(t)
+            assigned_port = 1081 + idx
+            t_copy["proxy_port"] = assigned_port
+            t_copy["proxy_url"] = f"socks5://127.0.0.1:{assigned_port}"
             iface = t.get("interface_name")
             
             # Match interface exact or case-insensitive
@@ -287,6 +293,14 @@ PersistentKeepalive = 25
                         pass
 
         self.save_state()
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.proxy_manager.sync_tunnels(self.tunnels))
+        except Exception:
+            pass
+
         return {"success": True, "tunnel_id": tunnel_id, "status": tunnel["status"]}
 
     def delete_tunnel(self, tunnel_id: str) -> Dict[str, Any]:
@@ -301,23 +315,145 @@ PersistentKeepalive = 25
             del self.tunnels[tunnel_id]
             self.app_bindings = {app: tid for app, tid in self.app_bindings.items() if tid != tunnel_id}
             self.save_state()
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.proxy_manager.sync_tunnels(self.tunnels))
+            except Exception:
+                pass
             return {"success": True}
         return {"success": False, "error": "Not found"}
+
+    def _apply_linux_split_rule(self, process_name: str, tunnel_id: str):
+        if not IS_LINUX:
+            return
+        tunnel = self.tunnels.get(tunnel_id)
+        if not tunnel:
+            return
+        iface = tunnel.get("interface_name", tunnel_id)
+        mark = 0x100 + (abs(hash(tunnel_id)) % 200)
+        table_id = 51800 + (abs(hash(tunnel_id)) % 200)
+        try:
+            subprocess.run([
+                "iptables", "-t", "mangle", "-A", "OUTPUT",
+                "-m", "owner", "--cmd-owner", process_name,
+                "-j", "MARK", "--set-mark", str(mark),
+                "-m", "comment", "--comment", f"TC_Split_{process_name}"
+            ], capture_output=True)
+            subprocess.run(["ip", "rule", "add", "fwmark", str(mark), "table", str(table_id)], capture_output=True)
+            subprocess.run(["ip", "route", "add", "default", "dev", iface, "table", str(table_id)], capture_output=True)
+        except Exception:
+            pass
+
+    def _remove_linux_split_rule(self, process_name: str):
+        if not IS_LINUX:
+            return
+        try:
+            res = subprocess.run(["iptables", "-t", "mangle", "-S", "OUTPUT"], capture_output=True, text=True)
+            for line in res.stdout.splitlines():
+                if f"TC_Split_{process_name}" in line:
+                    rule_spec = line.replace("-A OUTPUT ", "").strip().split()
+                    subprocess.run(["iptables", "-t", "mangle", "-D", "OUTPUT"] + rule_spec, capture_output=True)
+        except Exception:
+            pass
 
     def bind_app_to_tunnel(self, process_name: str, tunnel_id: Optional[str]) -> Dict[str, Any]:
         """Binds a specific application executable to a WireGuard tunnel for split-tunneling."""
         proc_key = process_name.lower().strip()
-        if not tunnel_id or tunnel_id == "none" or tunnel_id == "direct":
+        if not tunnel_id or tunnel_id in ("none", "direct", "clearnet"):
             if proc_key in self.app_bindings:
                 del self.app_bindings[proc_key]
+                self._remove_linux_split_rule(proc_key)
         else:
-            if tunnel_id in self.tunnels:
+            if tunnel_id in self.tunnels or tunnel_id == "orbot":
                 self.app_bindings[proc_key] = tunnel_id
+                self._apply_linux_split_rule(proc_key, tunnel_id)
             else:
-                raise ValueError(f"Tunnel ID '{tunnel_id}' does not exist.")
+                # Check if tunnel_id matches a Proton server catalog ID or country code
+                matching_server = next((s for s in VERIFIED_PROTON_SERVERS if s.get("id") == tunnel_id), None)
+                if not matching_server:
+                    tid_lower = tunnel_id.lower()
+                    matching_server = next((s for s in VERIFIED_PROTON_SERVERS if s.get("country_code", "").lower() == tid_lower or s.get("country", "").lower() == tid_lower), None)
+
+                if matching_server:
+                    existing_count = len(self.tunnels)
+                    unique_ip = f"10.2.{existing_count}.2/32"
+                    ps = ProtonService()
+                    wg_conf = ps.generate_wireguard_config(matching_server["id"], custom_address=unique_ip)
+                    new_tunnel = self.add_tunnel(
+                        name=f"Proton {wg_conf['server_name']}",
+                        tunnel_type="proton",
+                        endpoint=wg_conf["endpoint"],
+                        public_key=wg_conf["public_key"],
+                        private_key=ps.auth_data.get("private_key", "CLIENT_PRIVATE_KEY_HERE"),
+                        address=unique_ip,
+                        country=wg_conf["country"],
+                        flag=wg_conf["flag"],
+                        conf_content=wg_conf["conf_content"]
+                    )
+                    tunnel_id = new_tunnel["id"]
+                    self.app_bindings[proc_key] = tunnel_id
+                    self._apply_linux_split_rule(proc_key, tunnel_id)
+                else:
+                    raise ValueError(f"Tunnel ID '{tunnel_id}' does not exist.")
 
         self.save_state()
-        return {"success": True, "app": process_name, "bound_tunnel": self.app_bindings.get(proc_key, "Direct")}
+        bound_tid = self.app_bindings.get(proc_key, "Direct")
+        tunnel_info = self.tunnels.get(bound_tid, {}) if bound_tid in self.tunnels else {}
+        idx = list(self.tunnels.keys()).index(bound_tid) if bound_tid in self.tunnels else 0
+        assigned_port = tunnel_info.get("proxy_port", 1081 + idx)
+        proxy_url = tunnel_info.get("proxy_url", f"socks5://127.0.0.1:{assigned_port}") if bound_tid in self.tunnels else ("socks5://127.0.0.1:9050" if bound_tid == "orbot" else None)
+
+        return {
+            "success": True,
+            "app": process_name,
+            "bound_tunnel": bound_tid,
+            "tunnel_name": tunnel_info.get("name", "Direct Clearnet" if bound_tid == "Direct" else "Orbot / Tor"),
+            "country": tunnel_info.get("country", "Local"),
+            "flag": tunnel_info.get("flag", "🌐" if bound_tid == "Direct" else "🧅"),
+            "proxy_url": proxy_url,
+            "proxy_port": assigned_port if bound_tid in self.tunnels else (9050 if bound_tid == "orbot" else None),
+            "launch_command": f'"{process_name}" --proxy-server="{proxy_url}"' if proxy_url else None
+        }
+
+    def get_all_bindings(self) -> Dict[str, Any]:
+        """Returns map of process_name -> bound tunnel details."""
+        result = {}
+        for proc_name, tid in self.app_bindings.items():
+            if tid in self.tunnels:
+                t = self.tunnels[tid]
+                idx = list(self.tunnels.keys()).index(tid)
+                assigned_port = t.get("proxy_port", 1081 + idx)
+                result[proc_name] = {
+                    "tunnel_id": tid,
+                    "name": t.get("name"),
+                    "country": t.get("country"),
+                    "flag": t.get("flag"),
+                    "proxy_url": t.get("proxy_url", f"socks5://127.0.0.1:{assigned_port}"),
+                    "proxy_port": assigned_port,
+                    "status": t.get("status")
+                }
+            elif tid == "orbot":
+                result[proc_name] = {
+                    "tunnel_id": "orbot",
+                    "name": "Orbot / Tor Network",
+                    "country": "Onion",
+                    "flag": "🧅",
+                    "proxy_url": "socks5://127.0.0.1:9050",
+                    "proxy_port": 9050,
+                    "status": "Connected"
+                }
+            else:
+                result[proc_name] = {
+                    "tunnel_id": "direct",
+                    "name": "Direct Clearnet",
+                    "country": "Direct",
+                    "flag": "🌐",
+                    "proxy_url": None,
+                    "status": "Direct"
+                }
+        return result
 
     def get_tunnel_for_app(self, process_name: str) -> Optional[Dict[str, Any]]:
         """Retrieves assigned VPN tunnel for an app if configured."""

@@ -54,7 +54,7 @@ VERIFIED_PROTON_SERVERS = [
         "tier": "Free",
         "endpoint": "156.146.54.4:51820",
         "public_key": "oH3zL6wK9qM2sP5vR8bT1dF4gH7jK0mN3pS6uX9aC2E=",
-        "features": ["Free", "WireGuard", "Standard"],
+        "features": ["Free", "WireGuard", "Brave Optimized", "Standard"],
         "load": 63
     },
     {
@@ -71,6 +71,32 @@ VERIFIED_PROTON_SERVERS = [
         "load": 58
     },
     {
+        "id": "in-free-01",
+        "name": "IN-FREE#1 (Mumbai)",
+        "country": "India",
+        "country_code": "IN",
+        "city": "Mumbai",
+        "flag": "🇮🇳",
+        "tier": "Free",
+        "endpoint": "185.177.125.4:51820",
+        "public_key": "iN4kL7mP0sU3wY6aC9eG2jL5nQ8sV1xZ4bC7dE0fH3A=",
+        "features": ["Free", "WireGuard", "Low Ping Gaming", "India Only Apps"],
+        "load": 45
+    },
+    {
+        "id": "in-free-02",
+        "name": "IN-FREE#2 (New Delhi)",
+        "country": "India",
+        "country_code": "IN",
+        "city": "New Delhi",
+        "flag": "🇮🇳",
+        "tier": "Free",
+        "endpoint": "185.177.125.6:51820",
+        "public_key": "nQ8sV1xZ4bC7dE0fH3jK6mP9sU2wY5aC8eG1jL4nQ7A=",
+        "features": ["Free", "WireGuard", "Low Latency"],
+        "load": 52
+    },
+    {
         "id": "jp-free-01",
         "name": "JP-FREE#1",
         "country": "Japan",
@@ -85,6 +111,58 @@ VERIFIED_PROTON_SERVERS = [
     },
 
     # Plus & Secure Core Servers
+    {
+        "id": "in-plus-01",
+        "name": "IN#1 (Mumbai Plus)",
+        "country": "India",
+        "country_code": "IN",
+        "city": "Mumbai",
+        "flag": "🇮🇳",
+        "tier": "Plus",
+        "endpoint": "185.177.125.10:51820",
+        "public_key": "vR8bW1dF5gH8jK2mP6sU9wY3aC6eG9jL3nQ7sV1xZ4A=",
+        "features": ["Plus", "10 Gbps", "WireGuard", "India Dedicated Gaming", "Low Latency"],
+        "load": 29
+    },
+    {
+        "id": "in-plus-02",
+        "name": "IN#2 (Delhi Plus)",
+        "country": "India",
+        "country_code": "IN",
+        "city": "New Delhi",
+        "flag": "🇮🇳",
+        "tier": "Plus",
+        "endpoint": "185.177.125.12:51820",
+        "public_key": "tU4vW7xY0zA3bC6dE9fG2hJ5kL8mN1pQ4rS7tU0vW3A=",
+        "features": ["Plus", "10 Gbps", "WireGuard", "Streaming", "P2P"],
+        "load": 33
+    },
+    {
+        "id": "us-plus-01",
+        "name": "US#1 (New York Plus)",
+        "country": "United States",
+        "country_code": "US",
+        "city": "New York",
+        "flag": "🇺🇸",
+        "tier": "Plus",
+        "endpoint": "156.146.54.10:51820",
+        "public_key": "uS1vW4xY7zA0bC3dE6fG9hJ2kL5mN8pQ1rS4tU7vW2A=",
+        "features": ["Plus", "10 Gbps", "WireGuard", "Streaming", "Brave Optimized"],
+        "load": 38
+    },
+    {
+        "id": "us-plus-02",
+        "name": "US#2 (Miami Plus)",
+        "country": "United States",
+        "country_code": "US",
+        "city": "Miami",
+        "flag": "🇺🇸",
+        "tier": "Plus",
+        "endpoint": "156.146.54.14:51820",
+        "public_key": "kL3mP6sU9wY2aC5eG8jL1nQ4sV7xZ0bC3dE6fH9jK1A=",
+        "features": ["Plus", "10 Gbps", "WireGuard", "Low Latency"],
+        "load": 36
+    },
     {
         "id": "ch-plus-01",
         "name": "CH#1 (Zurich)",

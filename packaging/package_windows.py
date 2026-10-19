@@ -33,11 +33,18 @@ files_to_pack = [
     (os.path.join(ROOT_DIR, "LICENSE"), "LICENSE")
 ]
 
-# Verify all source files exist
+# Verify all source files exist (only executable is hard requirement)
+valid_files = []
 for src, arc in files_to_pack:
     if not os.path.exists(src):
-        print(f"[-] ERROR: Required packaging file missing: {src}")
-        sys.exit(1)
+        if arc == "TrackerControl-PC.exe":
+            print(f"[-] ERROR: Required packaging executable missing: {src}")
+            sys.exit(1)
+        else:
+            print(f"[!] Notice: Optional file missing: {src}. Skipping.")
+    else:
+        valid_files.append((src, arc))
+files_to_pack = valid_files
 
 print(f"[+] Writing compressed ZIP archive to: {ZIP_PATH}")
 with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED) as z:

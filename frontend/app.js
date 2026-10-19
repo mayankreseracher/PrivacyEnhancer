@@ -67,7 +67,7 @@ const state = {
   },
   updater: {
     status: "idle",
-    current_version: "1.0.5",
+    current_version: "1.0.6",
     latest_version: null,
     update_available: false,
     release_name: "",
@@ -168,19 +168,58 @@ function getCategoryBadge(category) {
   return "badge badge-functional";
 }
 
-// ==================== WebSocket Initialization ====================
+// ==================== WebSocket Initialization & Heartbeat ====================
+let wsHeartbeatTimer = null;
+let wsLastMessageTime = Date.now();
+
 function getCandidateWsUrls() {
-  const isFile = window.location.protocol === "file:" || !window.location.host;
   const isHttps = window.location.protocol === "https:";
   const wsProto = isHttps ? "wss:" : "ws:";
+  const host = window.location.host;
   
   const urls = [];
-  if (!isFile && window.location.host) {
-    urls.push(`${wsProto}//${window.location.host}/ws`);
+  // 1. Prefer current host that loaded the UI
+  if (host && window.location.protocol !== "file:") {
+    urls.push(`${wsProto}//${host}/ws`);
   }
+  // 2. IPv4 loopback (primary for local desktop engine)
   urls.push(`${wsProto}//127.0.0.1:8000/ws`);
-  urls.push(`${wsProto}//localhost:8000/ws`);
+  // 3. Fallback hostname
+  if (host !== "localhost:8000") {
+    urls.push(`${wsProto}//localhost:8000/ws`);
+  }
   return [...new Set(urls)];
+}
+
+function ensureRadarStatusOnline() {
+  const pulse = document.getElementById("enginePulse");
+  const status = document.getElementById("engineStatus");
+  if (pulse && pulse.style.backgroundColor !== "rgb(0, 255, 157)") {
+    pulse.style.backgroundColor = "#00ff9d";
+  }
+  if (status && status.textContent !== "RADAR ONLINE") {
+    status.textContent = "RADAR ONLINE";
+    status.style.color = "#00ff9d";
+  }
+}
+
+function startWsHeartbeat() {
+  if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+  wsHeartbeatTimer = setInterval(() => {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      try {
+        state.ws.send(JSON.stringify({ type: "PING", timestamp: Date.now() }));
+      } catch (e) {}
+    }
+    // Watchdog check: If no packet has arrived for 12 seconds, force reconnect
+    const elapsed = Date.now() - wsLastMessageTime;
+    if (elapsed > 12000) {
+      console.warn("[Radar] Watchdog timeout: No frames for 12s. Reconnecting socket...");
+      if (state.ws) {
+        try { state.ws.close(); } catch (e) {}
+      }
+    }
+  }, 4000);
 }
 
 function initWebSocket() {
@@ -206,18 +245,23 @@ function initWebSocket() {
 
   state.ws.onopen = () => {
     wsAttemptCount = 0;
-    const pulse = document.getElementById("enginePulse");
-    const status = document.getElementById("engineStatus");
-    if (pulse) pulse.style.backgroundColor = "#00ff9d";
-    if (status) {
-      status.textContent = "RADAR ONLINE";
-      status.style.color = "#00ff9d";
-    }
+    wsLastMessageTime = Date.now();
+    ensureRadarStatusOnline();
+    startWsHeartbeat();
+    // Immediate handshake ping
+    try {
+      state.ws.send(JSON.stringify({ type: "PING", timestamp: Date.now() }));
+    } catch (e) {}
   };
 
   state.ws.onmessage = (event) => {
+    wsLastMessageTime = Date.now();
+    ensureRadarStatusOnline();
     try {
       const msg = JSON.parse(event.data);
+      if (msg.type === "PONG") {
+        return;
+      }
       if (msg.type === "INIT_STATE") {
         updateStats(msg.data.stats);
         if (msg.data.recent_connections) {
@@ -280,11 +324,15 @@ function initWebSocket() {
   };
 
   state.ws.onclose = () => {
+    if (wsHeartbeatTimer) {
+      clearInterval(wsHeartbeatTimer);
+      wsHeartbeatTimer = null;
+    }
     const pulse = document.getElementById("enginePulse");
     const status = document.getElementById("engineStatus");
     if (pulse) pulse.style.backgroundColor = "#ff0055";
     if (status) {
-      status.textContent = "RADAR DISCONNECTED (Retrying...)";
+      status.textContent = "RADAR RECONNECTING...";
       status.style.color = "#ff0055";
     }
     scheduleWsReconnect();
@@ -294,7 +342,8 @@ function initWebSocket() {
 function scheduleWsReconnect() {
   if (wsReconnectTimeout) return;
   wsAttemptCount++;
-  const delay = Math.min(1500 + (wsAttemptCount * 500), 5000);
+  // Quick initial retry (500ms), backing off smoothly up to max 3000ms
+  const delay = Math.min(500 + (wsAttemptCount * 300), 3000);
   wsReconnectTimeout = setTimeout(() => {
     wsReconnectTimeout = null;
     initWebSocket();
@@ -1651,7 +1700,15 @@ async function loadVpnState() {
     loadPortForwarding();
     loadNatPmpStatus();
 
-    // 6. App Split Tunneling Matrix
+    // 6. VPN App Bindings
+    try {
+      const bRes = await fetch(`${API_BASE}/api/vpn/bindings`);
+      if (bRes.ok) {
+        state.appBindings = await bRes.json();
+      }
+    } catch (e) {}
+
+    // 7. App Split Tunneling Matrix
     renderAppRoutingMatrix();
   } catch (err) {
     console.error("Error loading VPN state:", err);
@@ -2021,35 +2078,62 @@ async function saveCustomTunnel() {
 // ==================== App Split Tunneling Routing ====================
 function renderAppRoutingMatrix() {
   const tbody = document.getElementById("appRoutingTableBody");
-  if (!tbody || !state.apps) return;
+  if (!tbody) return;
   tbody.innerHTML = "";
 
   const tunnels = state.vpnTunnels || [];
+  const bindings = state.appBindings || {};
 
-  if (state.apps.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 20px;">No applications registered in TrackerControl matrix yet. Add apps above to configure split tunneling.</td></tr>`;
-    return;
-  }
+  // Build app list: registered apps + detected apps if empty
+  let appList = state.apps && state.apps.length > 0 ? [...state.apps] : [
+    { name: "Brave Browser", process_name: "brave.exe", exe_path: "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe" },
+    { name: "Google Chrome", process_name: "chrome.exe", exe_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
+    { name: "Steam Client", process_name: "steam.exe", exe_path: "C:\\Program Files (x86)\\Steam\\steam.exe" },
+    { name: "Discord", process_name: "Discord.exe", exe_path: "%LocalAppData%\\Discord\\app.exe" },
+    { name: "qBittorrent", process_name: "qbittorrent.exe", exe_path: "C:\\Program Files\\qBittorrent\\qbittorrent.exe" }
+  ];
 
-  state.apps.forEach(app => {
+  appList.forEach(app => {
     const tr = document.createElement("tr");
+    const procKey = app.process_name.toLowerCase().trim();
+    const binding = bindings[procKey];
+    const boundTid = binding ? binding.tunnel_id : "direct";
 
     // Options for tunnels
-    let tunnelOptions = `<option value="direct">🌐 Clearnet (Bypass VPN)</option>`;
-    tunnelOptions += `<option value="orbot">🧅 Orbot / Tor Onion Network</option>`;
+    let tunnelOptions = `<option value="direct" ${boundTid === "direct" ? "selected" : ""}>🌐 Direct Clearnet (Shield Protected)</option>`;
+    tunnelOptions += `<option value="orbot" ${boundTid === "orbot" ? "selected" : ""}>🧅 Orbot / Tor Onion Network (SOCKS5 9050)</option>`;
     tunnels.forEach(t => {
-      tunnelOptions += `<option value="${t.id}">🛡️ WireGuard: ${t.name}</option>`;
+      const isSel = boundTid === t.id ? "selected" : "";
+      const portStr = t.proxy_port ? ` [Port ${t.proxy_port}]` : "";
+      tunnelOptions += `<option value="${t.id}" ${isSel}>${t.flag || "🛡️"} WireGuard: ${escapeHtml(t.name)} (${t.country || "Global"})${portStr}</option>`;
     });
+
+    let statusBadge = `<span class="badge" style="background: rgba(255,255,255,0.06); color: var(--text-muted);">Direct Shield</span>`;
+    let launchBtn = "";
+
+    if (boundTid && boundTid !== "direct") {
+      const flag = binding ? (binding.flag || "🔒") : "🔒";
+      const tname = binding ? binding.name : "Active Tunnel";
+      statusBadge = `<span class="badge badge-allowed" style="background: rgba(0,255,157,0.15); color: #00ff9d; border: 1px solid rgba(0,255,157,0.3);">
+        ${flag} Routed: ${escapeHtml(tname)}
+      </span>`;
+      launchBtn = `<button class="btn-action" style="padding: 3px 8px; font-size: 0.72rem; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px;" onclick="launchAppWithVpn('${escapeHtml(app.process_name)}', '${escapeHtml(app.exe_path || '')}', '${escapeHtml(boundTid)}')">
+        <span>🚀</span> Launch via VPN
+      </button>`;
+    }
 
     tr.innerHTML = `
       <td>
         <div style="display: flex; align-items: center; gap: 8px;">
           <span>${getAppIcon(app.process_name)}</span>
-          <span style="font-weight: 700; color: #fff;">${escapeHtml(app.process_name)}</span>
+          <div>
+            <div style="font-weight: 700; color: #fff;">${escapeHtml(app.process_name)}</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(app.name || app.process_name)}</div>
+          </div>
         </div>
       </td>
       <td style="color: var(--text-muted); font-size: 0.75rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-        ${escapeHtml(app.exe_path)}
+        ${escapeHtml(app.exe_path || "Auto-detected by OS")}
       </td>
       <td>
         <select class="app-action-select" onchange="setAppRouting('${escapeHtml(app.process_name)}', this.value)">
@@ -2057,7 +2141,10 @@ function renderAppRoutingMatrix() {
         </select>
       </td>
       <td>
-        <span class="badge badge-allowed">Split Tunnel Active</span>
+        <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
+          ${statusBadge}
+          ${launchBtn}
+        </div>
       </td>
     `;
     tbody.appendChild(tr);
@@ -2070,20 +2157,182 @@ async function setAppRouting(processName, routeChoice) {
 
   if (routeChoice === "orbot") {
     mode = "orbot";
-  } else if (routeChoice !== "direct") {
+    tunnelId = "orbot";
+  } else if (routeChoice !== "direct" && routeChoice !== "clearnet") {
     mode = "tunnel";
     tunnelId = routeChoice;
   }
 
   try {
-    await fetch(`${API_BASE}/api/vpn/split-tunneling`, {
+    const res = await fetch(`${API_BASE}/api/vpn/split-tunneling`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ process_name: processName, mode, tunnel_id: tunnelId })
     });
-    showToast("Split Tunnel", `App ${processName} routed via ${routeChoice}.`, "info");
+    const data = await res.json();
+    
+    // Update local state bindings
+    if (!state.appBindings) state.appBindings = {};
+    const procKey = processName.toLowerCase().trim();
+    if (tunnelId && tunnelId !== "direct") {
+      const t = (state.vpnTunnels || []).find(x => x.id === tunnelId);
+      state.appBindings[procKey] = {
+        tunnel_id: tunnelId,
+        name: t ? t.name : (tunnelId === "orbot" ? "Orbot Tor" : tunnelId),
+        country: t ? t.country : "VPN",
+        flag: t ? t.flag : "🔒",
+        proxy_url: t ? t.proxy_url : (tunnelId === "orbot" ? "socks5://127.0.0.1:9050" : null)
+      };
+      showToast("Split Tunnel", `${processName} routed via ${t ? t.name : routeChoice}.`, "success");
+    } else {
+      delete state.appBindings[procKey];
+      showToast("Split Tunnel", `${processName} set to Direct Shield.`, "info");
+    }
+
+    renderAppRoutingMatrix();
   } catch (err) {
     console.error("Error setting app routing:", err);
+  }
+}
+
+async function launchAppWithVpn(processName, exePath, tunnelId) {
+  try {
+    const res = await fetch(`${API_BASE}/api/vpn/launch-app`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ process_name: processName, exe_path: exePath, tunnel_id: tunnelId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("App Launched", `Launched ${processName} with ${data.tunnel} routing.`, "success");
+    } else {
+      showToast("Launch Info", data.error || "Could not launch automatically.", "info");
+    }
+  } catch (err) {
+    showToast("Launch Failed", "Error launching app: " + err, "error");
+  }
+}
+
+async function applyVpnPreset(presetName) {
+  if (presetName === "brave_us") {
+    let usTunnel = (state.vpnTunnels || []).find(t => (t.country && t.country.toLowerCase().includes("united states")) || (t.name && t.name.toLowerCase().includes("us")));
+    if (!usTunnel) {
+      showToast("Deploying US Tunnel", "Auto-deploying US-FREE#1 for Brave split-tunnel...", "info");
+      try {
+        const dRes = await fetch(`${API_BASE}/api/vpn/proton/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ server_id: "us-free-01" })
+        });
+        const dData = await dRes.json();
+        if (dData.success && dData.tunnel) {
+          usTunnel = dData.tunnel;
+          await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(usTunnel.id)}/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ activate: true })
+          });
+        }
+      } catch (e) {}
+    }
+
+    if (usTunnel) {
+      await setAppRouting("brave.exe", usTunnel.id);
+      await setAppRouting("brave", usTunnel.id);
+      showToast("Preset Applied", `Brave browser routed through 🇺🇸 ${usTunnel.name}`, "success");
+    } else {
+      showToast("Preset Notice", "Deploy 'US-FREE#1' from the server fleet below.", "info");
+    }
+  } else if (presetName === "games_india") {
+    let inTunnel = (state.vpnTunnels || []).find(t => (t.country && t.country.toLowerCase().includes("india")) || (t.name && t.name.toLowerCase().includes("in")));
+    if (!inTunnel) {
+      showToast("Deploying India Tunnel", "Auto-deploying IN-FREE#1 for Gaming split-tunnel...", "info");
+      try {
+        const dRes = await fetch(`${API_BASE}/api/vpn/proton/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ server_id: "in-free-01" })
+        });
+        const dData = await dRes.json();
+        if (dData.success && dData.tunnel) {
+          inTunnel = dData.tunnel;
+          await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(inTunnel.id)}/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ activate: true })
+          });
+        }
+      } catch (e) {}
+    }
+
+    if (inTunnel) {
+      await setAppRouting("steam.exe", inTunnel.id);
+      await setAppRouting("game.exe", inTunnel.id);
+      await setAppRouting("bgmi.exe", inTunnel.id);
+      await setAppRouting("valorant.exe", inTunnel.id);
+      showToast("Preset Applied", `Gaming apps routed through 🇮🇳 ${inTunnel.name}`, "success");
+    } else {
+      showToast("Preset Notice", "Deploy 'IN-FREE#1' or 'IN#1' from the server fleet below.", "info");
+    }
+  } else if (presetName === "torrent_nl") {
+    let nlTunnel = (state.vpnTunnels || []).find(t => (t.country && t.country.toLowerCase().includes("netherlands")) || (t.name && t.name.toLowerCase().includes("nl")));
+    if (!nlTunnel) {
+      showToast("Deploying NL Tunnel", "Auto-deploying NL-FREE#1 for P2P split-tunnel...", "info");
+      try {
+        const dRes = await fetch(`${API_BASE}/api/vpn/proton/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ server_id: "nl-free-01" })
+        });
+        const dData = await dRes.json();
+        if (dData.success && dData.tunnel) {
+          nlTunnel = dData.tunnel;
+          await fetch(`${API_BASE}/api/vpn/tunnels/${encodeURIComponent(nlTunnel.id)}/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ activate: true })
+          });
+        }
+      } catch (e) {}
+    }
+
+    if (nlTunnel) {
+      await setAppRouting("qbittorrent.exe", nlTunnel.id);
+      await setAppRouting("utorrent.exe", nlTunnel.id);
+      showToast("Preset Applied", `P2P apps routed through 🇳🇱 ${nlTunnel.name}`, "success");
+    } else {
+      showToast("Preset Notice", "Deploy 'NL-FREE#1' from the server fleet below.", "info");
+    }
+  } else if (presetName === "reset_direct") {
+    const appsToReset = state.apps ? state.apps.map(a => a.process_name) : ["brave.exe", "steam.exe", "qbittorrent.exe"];
+    for (const p of appsToReset) {
+      await setAppRouting(p, "direct");
+    }
+    showToast("Preset Applied", "All apps reset to Direct Shield.", "info");
+  }
+
+  loadVpnState();
+}
+
+async function quitTrackerControl() {
+  if (!confirm("Are you sure you want to stop all protection and quit TrackerControl PC? This will restore DNS settings and disconnect all VPN tunnels.")) {
+    return;
+  }
+  try {
+    await fetch(`${API_BASE}/api/system/quit`, { method: "POST" });
+    showToast("Shutting Down", "TrackerControl PC is shutting down...", "info");
+    setTimeout(() => {
+      document.body.innerHTML = `
+        <div style="display: flex; height: 100vh; align-items: center; justify-content: center; flex-direction: column; background: #0a0d12; color: #fff; font-family: sans-serif; text-align: center; padding: 20px;">
+          <div style="font-size: 3rem; margin-bottom: 12px;">🛡️</div>
+          <h2 style="color: #00ff9d; margin-bottom: 8px;">TrackerControl PC Engine Stopped</h2>
+          <p style="color: #94a3b8; max-width: 500px;">System DNS filtering has been restored and all WireGuard tunnels disconnected.</p>
+          <p style="color: #64748b; font-size: 0.85rem; margin-top: 14px;">You may now safely close this window.</p>
+        </div>
+      `;
+    }, 800);
+  } catch (e) {
+    console.error(e);
   }
 }
 
@@ -2368,7 +2617,7 @@ function updateUpdaterState(data) {
 function renderUpdaterUI(data) {
   if (!data) return;
 
-  const currentVer = data.current_version || "1.0.5";
+  const currentVer = data.current_version || "1.0.6";
   const latestVer = data.latest_version || currentVer;
   const isAvailable = !!data.update_available;
   const status = data.status || "idle";
@@ -2558,7 +2807,7 @@ async function checkUpdates(manual = false) {
     if (data.update_available) {
       showToast("Update Available", `TrackerControl PC v${data.latest_version} is available!`, "info");
     } else if (manual) {
-      showToast("Up to Date", `TrackerControl PC is running the latest version (v${data.current_version || "1.0.5"}).`, "success");
+      showToast("Up to Date", `TrackerControl PC is running the latest version (v${data.current_version || "1.0.6"}).`, "success");
     }
   } catch (err) {
     state.updater.status = "error";

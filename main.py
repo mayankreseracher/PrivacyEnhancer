@@ -151,26 +151,54 @@ except Exception:
     pass
 
 
+def run_service_mode():
+    """
+    Continuous background service mode (ideal for Windows Service, systemd, or launchd).
+    Runs FastAPI server, DNS sinkhole, Firewall, and WireGuard tunnels without opening a GUI window.
+    """
+    from backend.server import app, engine
+    from backend.tray_service import TrayService
+
+    print("[+] Starting TrackerControl PC in Sovereign Background Service mode...")
+    tray = TrayService(engine=engine, on_quit=cleanup)
+    tray.start()
+
+    bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+    try:
+        uvicorn.run(app, host=bind_host, port=8000, log_level="warning")
+    except (KeyboardInterrupt, SystemExit):
+        cleanup()
+
+
 def run_browser_mode(server_started: bool = False):
     """
     Fallback / command-line browser mode:
-    Starts uvicorn normally and opens dashboard in the default web browser.
+    Starts uvicorn normally and opens dashboard in the default web browser with persistent tray.
     """
     import webbrowser
+    from backend.server import app, engine
+    from backend.tray_service import TrayService
+
     url = "http://127.0.0.1:8000"
     print(f"\n[+] TrackerControl Web Dashboard available at {url}")
+
+    tray = TrayService(engine=engine, on_open_dashboard=lambda: webbrowser.open(url), on_quit=cleanup)
+    tray.start()
+
     try:
         webbrowser.open(url)
     except Exception as e:
         print(f"[!] Could not open default web browser: {e}")
 
     if not server_started:
-        from backend.server import app
         bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
-        uvicorn.run(app, host=bind_host, port=8000, log_level="info")
+        try:
+            uvicorn.run(app, host=bind_host, port=8000, log_level="info")
+        except (KeyboardInterrupt, SystemExit):
+            cleanup()
     else:
         try:
-            while True:
+            while not _cleaned_up:
                 time.sleep(1)
         except (KeyboardInterrupt, SystemExit):
             cleanup()
@@ -180,7 +208,8 @@ def run_native_window():
     """
     Native desktop application mode using pywebview.
     Runs FastAPI server in a background daemon thread, then launches pywebview native window.
-    Falls back to browser mode if pywebview is unavailable or fails to create window.
+    When the window is closed, TrackerControl continues running in the background as a sovereign
+    privacy service with system tray access.
     """
     try:
         import webview
@@ -189,7 +218,9 @@ def run_native_window():
         run_browser_mode(server_started=False)
         return
 
-    from backend.server import app
+    from backend.server import app, engine
+    from backend.tray_service import TrayService
+    import webbrowser
 
     def start_server():
         bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
@@ -202,6 +233,14 @@ def run_native_window():
     # Give server a moment to start
     time.sleep(1.5)
 
+    # Initialize System Tray Sentry
+    tray = TrayService(
+        engine=engine,
+        on_open_dashboard=lambda: webbrowser.open("http://127.0.0.1:8000"),
+        on_quit=cleanup
+    )
+    tray.start()
+
     try:
         # Create native desktop window
         window = webview.create_window(
@@ -210,14 +249,26 @@ def run_native_window():
             width=1400,
             height=900,
             min_size=(1024, 700),
-            confirm_close=True,
+            confirm_close=False,
             text_select=True
         )
         webview.start(debug=False)
-        # Cleanup when pywebview native window is closed
-        cleanup()
+
+        # When pywebview native window is closed, do NOT kill the background service!
+        print("\n[+] Desktop window closed. TrackerControl PC continues running in background service mode.")
+        print("[+] System DNS filtering, Firewall rules, and Multi-VPN split tunneling remain 100% active.")
+        print("[+] Click the system tray icon or visit http://127.0.0.1:8000 to reopen the dashboard.")
+        tray.notify(
+            "TrackerControl PC Active",
+            "Running in background. DNS sinkhole & Multi-VPN tunnels remain active."
+        )
+
+        # Keep background service active until explicit quit
+        while not _cleaned_up:
+            time.sleep(1)
+
     except Exception as e:
-        print(f"[!] pywebview failed to create or start native window ({e}). Falling back to browser mode.")
+        print(f"[!] pywebview encountered error ({e}). Falling back to browser mode.")
         run_browser_mode(server_started=True)
 
 
@@ -228,6 +279,12 @@ def main():
 
     # Print startup banner
     print_banner()
+
+    # Check for service/daemon mode
+    is_service = any(arg in sys.argv for arg in ("--service", "--daemon", "--background"))
+    if is_service:
+        run_service_mode()
+        return
 
     # Check for --headless or --browser flag to force browser mode
     force_browser_mode = any(arg in sys.argv for arg in ("--headless", "--browser"))

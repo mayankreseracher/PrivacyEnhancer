@@ -20,14 +20,15 @@
     </div>
 
     <div class="header-controls">
-      <div style="display: flex; align-items: center; gap: 8px; margin-right: 12px;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-right: 12px; flex-wrap: wrap;">
         <span id="hostOsBadge" style="background: rgba(0, 229, 255, 0.12); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--accent-glow); font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; font-weight: 600;">🖥️ OS: Detecting...</span>
         <button class="update-pill-btn" id="updatePillBtn" onclick="openUpdateModal()" title="System Updates & Version" aria-label="System Updates">
           <span class="update-pill-dot" id="updatePillDot"></span>
-          <span id="updatePillText">v1.0.5</span>
+          <span id="updatePillText">v1.0.6</span>
         </button>
+        <span title="Continuous Background Service: Closing window keeps DNS & Multi-VPN tunnels running" style="background: rgba(0, 255, 157, 0.12); border: 1px solid rgba(0, 255, 157, 0.3); color: #00ff9d; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: default;">🟢 Svc Active</span>
         <span class="live-pulse" id="enginePulse"></span>
-        <span style="font-size: 0.8rem; font-weight: 700; color: #00ff9d;" id="engineStatus">ENGINE ARMED</span>
+        <span style="font-size: 0.8rem; font-weight: 700; color: #00ff9d;" id="engineStatus">RADAR ONLINE</span>
       </div>
 
       <select class="mode-select" id="shieldModeSelect">
@@ -44,6 +45,10 @@
         </div>
         <span>Shield Active</span>
       </label>
+
+      <button class="btn-action" style="padding: 4px 9px; font-size: 0.75rem; background: rgba(255,0,85,0.15); border-color: rgba(255,0,85,0.4); color: #ff0055; margin-left: 6px;" onclick="quitTrackerControl()" title="Stop all protection, disconnect tunnels, and quit engine">
+        🛑 Quit Engine
+      </button>
     </div>
   </header>
 
@@ -508,8 +513,9 @@
           <button class="filter-pill active" data-filter="all">All Servers</button>
           <button class="filter-pill" data-filter="free">🟢 Free Tier</button>
           <button class="filter-pill" data-filter="plus">⭐ Plus Tier</button>
-          <button class="filter-pill" data-filter="NL">🇳🇱 Netherlands</button>
+          <button class="filter-pill" data-filter="IN">🇮🇳 India</button>
           <button class="filter-pill" data-filter="US">🇺🇸 United States</button>
+          <button class="filter-pill" data-filter="NL">🇳🇱 Netherlands</button>
           <button class="filter-pill" data-filter="JP">🇯🇵 Japan</button>
           <button class="filter-pill" data-filter="CH">🇨🇭 Switzerland</button>
           <button class="filter-pill" data-filter="DE">🇩🇪 Germany</button>
@@ -523,12 +529,32 @@
 
       <!-- Section 3: App-to-Tunnel Split-Tunneling Matrix -->
       <div class="glass-panel" style="padding: 20px; margin-bottom: 24px;">
-        <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff; margin-bottom: 8px;">
-          Per-Application VPN Routing Matrix (Split-Tunneling)
-        </h3>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 16px;">
-          Assign specific desktop apps to specific WireGuard tunnels or Orbot (e.g. FreeTube via Netherlands, Discord via US, Browser via Tor, Games Direct).
-        </p>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 10px;">
+          <div>
+            <h3 style="font-size: 1.05rem; font-weight: 700; color: #fff;">
+              Per-Application Multi-VPN Routing Matrix (Split-Tunneling)
+            </h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">
+              Route distinct apps through different countries concurrently (e.g. Brave via US, Gaming via India, Torrents via Netherlands, Tor for Private Browsing).
+            </p>
+          </div>
+        </div>
+
+        <!-- Quick Multi-VPN Presets -->
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+          <button class="btn-action" style="font-size: 0.78rem; padding: 5px 12px; background: rgba(0, 229, 255, 0.15); border-color: var(--accent-glow);" onclick="applyVpnPreset('brave_us')">
+            🇺🇸 Route Brave Browser via US
+          </button>
+          <button class="btn-action" style="font-size: 0.78rem; padding: 5px 12px; background: rgba(255, 153, 51, 0.15); border-color: #ff9933; color: #ffb366;" onclick="applyVpnPreset('games_india')">
+            🇮🇳 Route Gaming via India
+          </button>
+          <button class="btn-action" style="font-size: 0.78rem; padding: 5px 12px; background: rgba(181, 23, 158, 0.15); border-color: var(--accent-purple);" onclick="applyVpnPreset('torrent_nl')">
+            🇳🇱 Route P2P via Netherlands
+          </button>
+          <button class="btn-action" style="font-size: 0.78rem; padding: 5px 12px; background: rgba(255, 255, 255, 0.06); border-color: rgba(255,255,255,0.2);" onclick="applyVpnPreset('reset_direct')">
+            🔄 Reset All Direct
+          </button>
+        </div>
 
         <div class="waterfall-table-wrapper">
           <table class="waterfall-table">
@@ -848,7 +874,7 @@
             <div class="update-version-split">
               <div class="version-box">
                 <span class="version-label">Current Version</span>
-                <span class="version-value" id="updateCurrentVersion">v1.0.5</span>
+                <span class="version-value" id="updateCurrentVersion">v1.0.6</span>
               </div>
               <div class="version-arrow">➔</div>
               <div class="version-box">

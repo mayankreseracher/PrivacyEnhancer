@@ -67,6 +67,10 @@ hidden_imports = [
     'shutil',
     'subprocess',
     'webview',
+    'pystray',
+    'PIL',
+    'PIL.Image',
+    'PIL.ImageDraw',
 ]
 
 if IS_WIN:
