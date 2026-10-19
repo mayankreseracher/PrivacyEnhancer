@@ -78,6 +78,7 @@ class TrackerEngine:
             protection_mode=self.protection_mode
         )
         self.monitor = self.process_monitor
+        self.dns_proxy.process_monitor = self.process_monitor
 
         self._dns_task = None
         self._monitor_task = None

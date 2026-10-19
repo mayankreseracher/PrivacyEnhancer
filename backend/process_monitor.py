@@ -6,10 +6,14 @@ and Parent Process Trees, resolving domain names and classifying trackers.
 
 import asyncio
 import concurrent.futures
-import psutil
+import os
+import shutil
 import socket
+import subprocess
 import time
-from typing import Dict, Any, Set, Tuple, Optional, Callable
+from typing import Dict, Any, Set, Tuple, Optional, Callable, List
+
+import psutil
 
 from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS
 
@@ -45,6 +49,7 @@ class ProcessMonitor:
         self.seen_connections: Set[Tuple[int, str, int, str, int]] = set()
         self.process_cache: Dict[int, Dict[str, Any]] = {}
         self.rdns_cache: Dict[str, str] = {}
+        self._recent_endpoint_cache: Dict[Tuple[str, int], Tuple[float, Dict[str, Any]]] = {}
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
         self._warned_permissions = False
 
@@ -101,32 +106,148 @@ class ProcessMonitor:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return {"name": f"PID-{pid}", "exe": "", "parent": "Unknown"}
 
+    def _find_process_via_lsof(self, client_ip: str, client_port: int) -> Optional[Dict[str, Any]]:
+        """
+        macOS & Unix non-root fallback: resolves owning process using lsof for a given local socket port.
+        """
+        lsof_bin = shutil.which("lsof") or ("/usr/sbin/lsof" if os.path.exists("/usr/sbin/lsof") else None)
+        if not lsof_bin:
+            return None
+
+        try:
+            cmd = [lsof_bin, "-n", "-P", f"-i:{client_port}"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            if res.returncode == 0 and res.stdout:
+                lines = res.stdout.strip().splitlines()
+                # Skip header line
+                for line in lines[1:]:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        pid = int(parts[1])
+                        endpoint_match = False
+                        for p in parts[8:]:
+                            if f":{client_port}" in p:
+                                endpoint_match = True
+                                break
+                        if endpoint_match or len(lines) == 2:
+                            info = self.get_process_info(pid)
+                            cmd_name = parts[0]
+                            return {
+                                "pid": pid,
+                                "process_name": info.get("name") or cmd_name,
+                                "exe_path": info.get("exe") or ""
+                            }
+        except Exception:
+            pass
+        return None
+
+    def _get_connections_via_lsof(self) -> List[Any]:
+        """
+        Parses active TCP and UDP internet connections via lsof on macOS / Unix
+        when psutil.net_connections() cannot inspect kernel sockets without root.
+        """
+        lsof_bin = shutil.which("lsof") or ("/usr/sbin/lsof" if os.path.exists("/usr/sbin/lsof") else None)
+        if not lsof_bin:
+            return []
+
+        conns = []
+        try:
+            cmd = [lsof_bin, "-iTCP", "-iUDP", "-n", "-P"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            if res.returncode == 0 and res.stdout:
+                for line in res.stdout.strip().splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) < 8 or not parts[1].isdigit():
+                        continue
+
+                    pid = int(parts[1])
+
+                    # Look for connection part with -> (established or connected UDP/TCP)
+                    conn_str = None
+                    for p in parts[8:]:
+                        if "->" in p:
+                            conn_str = p
+                            break
+
+                    if not conn_str:
+                        continue
+
+                    conn_str = conn_str.split("(")[0].strip()
+                    if "->" not in conn_str:
+                        continue
+
+                    local_part, remote_part = conn_str.split("->", 1)
+                    if ":" not in local_part or ":" not in remote_part:
+                        continue
+
+                    local_ip, local_port_str = local_part.rsplit(":", 1)
+                    remote_ip, remote_port_str = remote_part.rsplit(":", 1)
+
+                    try:
+                        local_port = int(local_port_str)
+                        remote_port = int(remote_port_str)
+                    except ValueError:
+                        continue
+
+                    is_tcp = "TCP" in line.upper()
+                    sock_type = socket.SOCK_STREAM if is_tcp else socket.SOCK_DGRAM
+
+                    conn_obj = type("Connection", (), {
+                        "pid": pid,
+                        "type": sock_type,
+                        "laddr": type("Addr", (), {"ip": local_ip, "port": local_port})(),
+                        "raddr": type("Addr", (), {"ip": remote_ip, "port": remote_port})(),
+                        "status": "ESTABLISHED"
+                    })()
+                    conns.append(conn_obj)
+        except Exception:
+            pass
+        return conns
+
     def find_process_for_endpoint(self, client_ip: str, client_port: int) -> Optional[Dict[str, Any]]:
         """
         Attempts to correlate a local socket (client_ip, client_port) to the owning process.
         Returns a dict: {"pid": int|None, "process_name": str, "exe_path": str} or None on failure.
 
-        Note: This function performs a fresh psutil.net_connections() scan and may require
-        elevated permissions on some platforms. Callers should run it in a thread executor
-        to avoid blocking the event loop.
+        Note: Performs a cached or fresh scan and falls back to lsof on macOS/Unix when non-root.
+        Callers should run it in a thread executor to avoid blocking the event loop.
         """
+        cache_key = (client_ip, client_port)
+        now = time.time()
+        cached = self._recent_endpoint_cache.get(cache_key)
+        if cached and (now - cached[0]) < 2.0:
+            return cached[1]
+
+        result = None
         try:
             conns = psutil.net_connections(kind="inet")
+            for c in conns:
+                laddr = c.laddr
+                if not laddr:
+                    continue
+                lip = getattr(laddr, "ip", None)
+                lport = getattr(laddr, "port", None)
+                if lip == client_ip and lport == client_port:
+                    pid = c.pid or None
+                    info = self.get_process_info(pid)
+                    result = {"pid": pid, "process_name": info.get("name"), "exe_path": info.get("exe")}
+                    break
+        except (psutil.AccessDenied, PermissionError):
+            result = self._find_process_via_lsof(client_ip, client_port)
         except Exception:
-            return None
+            result = None
 
-        for c in conns:
-            laddr = c.laddr
-            if not laddr:
-                continue
-            lip = getattr(laddr, "ip", None)
-            lport = getattr(laddr, "port", None)
-            if lip == client_ip and lport == client_port:
-                pid = c.pid or None
-                info = self.get_process_info(pid)
-                return {"pid": pid, "process_name": info.get("name"), "exe_path": info.get("exe")}
+        if result is None and (IS_MACOS or IS_LINUX):
+            result = self._find_process_via_lsof(client_ip, client_port)
 
-        return None
+        if result:
+            self._recent_endpoint_cache[cache_key] = (now, result)
+            if len(self._recent_endpoint_cache) > 500:
+                self._recent_endpoint_cache = {
+                    k: v for k, v in self._recent_endpoint_cache.items() if (now - v[0]) < 4.0
+                }
+
+        return result
 
     async def scan_once(self):
         loop = asyncio.get_event_loop()
@@ -143,7 +264,13 @@ class ProcessMonitor:
                 elif IS_MACOS:
                     print("[ProcessMonitor] Tip: Run with sudo on macOS for complete socket inspection.")
                 self._warned_permissions = True
-            connections = []
+            if IS_MACOS or IS_LINUX:
+                connections = await loop.run_in_executor(
+                    self.thread_pool,
+                    self._get_connections_via_lsof
+                )
+            else:
+                connections = []
         except Exception as e:
             print(f"[ProcessMonitor] Error fetching connections: {e}")
             connections = []
@@ -274,7 +401,7 @@ class ProcessMonitor:
                 "domain": domain,
                 "ip": remote_ip,
                 "port": remote_port,
-                "protocol": "TCP" if c.type == socket.SOCK_STREAM else "UDP",
+                "protocol": "TCP" if getattr(c, "type", socket.SOCK_STREAM) == socket.SOCK_STREAM else "UDP",
                 "category": threat.get("category", "General"),
                 "company": threat.get("company", "Unknown"),
                 "risk": threat.get("risk", "Low"),

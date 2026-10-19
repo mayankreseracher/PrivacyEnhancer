@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>org.trackercontrol.pc</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>1.0.5</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.0.5</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>
@@ -28,6 +28,8 @@
     <string>11.0</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 TrackerControl Contributors. MIT License.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>TrackerControl PC requires access to local network sockets to monitor processes, filter network trackers, and run the privacy proxy.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

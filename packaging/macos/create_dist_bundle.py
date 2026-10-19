@@ -6,6 +6,7 @@ universal runnable scripts, system installer, and compressed archives (.tar.gz a
 """
 
 import os
+import shutil
 import tarfile
 import zipfile
 
@@ -45,7 +46,7 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 # Auto-install minimal requirements if missing
-if ! "$PYTHON_BIN" -c "import fastapi, uvicorn, psutil, dnslib, requests" >/dev/null 2>&1; then
+if ! "$PYTHON_BIN" -c "import fastapi, uvicorn, psutil, dnslib, requests, webview, stem" >/dev/null 2>&1; then
     echo "[+] Installing required Python packages for TrackerControl..."
     "$PYTHON_BIN" -m pip install -r requirements.txt --quiet || true
 fi
@@ -160,10 +161,11 @@ for f in os.listdir(data_dir):
         app_files.append((f"data/{f}", os.path.join(data_dir, f)))
 
 # Create temporary app directory structure in memory/tar
-tar_path = os.path.join(DIST_MAC, "TrackerControl-v1.0.0-macOS-universal.tar.gz")
-zip_path = os.path.join(DIST_MAC, "TrackerControl-v1.0.0-macOS-universal.zip")
+VERSION = os.environ.get("VERSION", "1.0.5").lstrip("v")
+tar_path = os.path.join(DIST_MAC, f"TrackerControl-v{VERSION}-macOS-universal.tar.gz")
+zip_path = os.path.join(DIST_MAC, f"TrackerControl-v{VERSION}-macOS-universal.zip")
 
-print("[+] Creating universal macOS Tarball package...")
+print(f"[+] Creating universal macOS Tarball package (v{VERSION})...")
 with tarfile.open(tar_path, "w:gz") as tar:
     # 1. Info.plist
     tar.add(os.path.join(ROOT_DIR, "packaging/macos/Info.plist"), arcname="TrackerControl.app/Contents/Info.plist")
@@ -225,3 +227,8 @@ with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_f:
     zip_f.write(os.path.join(ROOT_DIR, "LICENSE"), arcname="LICENSE")
 
 print(f"[+] Assembled {zip_path} ({os.path.getsize(zip_path):,} bytes)")
+try:
+    shutil.copy2(tar_path, os.path.join(DIST_MAC, "TrackerControl-macOS-universal.tar.gz"))
+    shutil.copy2(zip_path, os.path.join(DIST_MAC, "TrackerControl-macOS-universal.zip"))
+except Exception:
+    pass

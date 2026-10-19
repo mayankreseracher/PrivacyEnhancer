@@ -166,7 +166,8 @@ def run_browser_mode(server_started: bool = False):
 
     if not server_started:
         from backend.server import app
-        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+        bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+        uvicorn.run(app, host=bind_host, port=8000, log_level="info")
     else:
         try:
             while True:
@@ -191,7 +192,8 @@ def run_native_window():
     from backend.server import app
 
     def start_server():
-        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
+        bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+        uvicorn.run(app, host=bind_host, port=8000, log_level="warning")
 
     # Start FastAPI server in background thread
     server_thread = threading.Thread(target=start_server, daemon=True)

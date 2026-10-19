@@ -34,7 +34,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Ensure requirements installed
-if ! "$PYTHON_BIN" -c "import fastapi, uvicorn, psutil, dnslib" >/dev/null 2>&1; then
+if ! "$PYTHON_BIN" -c "import fastapi, uvicorn, psutil, dnslib, requests, webview, stem" >/dev/null 2>&1; then
     echo "[+] Installing required Python packages..."
     "$PYTHON_BIN" -m pip install -r requirements.txt
 fi

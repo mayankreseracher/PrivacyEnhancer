@@ -9,7 +9,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist/macos"
-VERSION="1.0.0"
+VERSION="${VERSION:-1.0.5}"
 
 echo "========================================================================"
 echo "  [+] Building TrackerControl PC for macOS (v${VERSION})"

@@ -620,11 +620,15 @@ class DNSProxy:
                 )
                 if set_res.returncode == 0:
                     print(f"[DNS] Configured macOS DNS on '{s}' -> {self.listen_host}")
+                else:
+                    err_msg = (set_res.stderr or set_res.stdout).strip()
+                    print(f"[DNS] Notice: networksetup setdnsservers on '{s}' returned: {err_msg} (Administrator privileges may be required)")
             except Exception as e:
                 print(f"[DNS] Error configuring macOS DNS on '{s}': {e}")
 
         # Flush macOS DNS cache
         try:
+            subprocess.run(["dscacheutil", "-flushcache"], capture_output=True, timeout=3)
             subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True, timeout=3)
         except Exception:
             pass
@@ -664,6 +668,7 @@ class DNSProxy:
 
         # Flush macOS DNS cache
         try:
+            subprocess.run(["dscacheutil", "-flushcache"], capture_output=True, timeout=3)
             subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True, timeout=3)
         except Exception:
             pass

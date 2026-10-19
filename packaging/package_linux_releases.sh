@@ -14,7 +14,7 @@ GREEN="\033[1;32m"
 CYAN="\033[1;36m"
 RESET="\033[0m"
 
-VERSION="1.0.0"
+VERSION="${VERSION:-1.0.5}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist/linux"

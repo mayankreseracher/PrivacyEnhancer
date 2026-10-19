@@ -205,6 +205,16 @@ PersistentKeepalive = 25
         self.save_state()
         return tunnel_record
 
+    def _get_wg_quick_bin(self) -> Optional[str]:
+        """Resolves wg-quick executable across standard PATH and macOS Homebrew locations."""
+        if shutil.which("wg-quick"):
+            return shutil.which("wg-quick")
+        if IS_MACOS:
+            for p in ["/opt/homebrew/bin/wg-quick", "/usr/local/bin/wg-quick", "/usr/bin/wg-quick"]:
+                if os.path.exists(p):
+                    return p
+        return None
+
     def toggle_tunnel(self, tunnel_id: str, activate: bool) -> Dict[str, Any]:
         """Activates or deactivates a specific WireGuard tunnel across Linux or Windows."""
         if tunnel_id not in self.tunnels:
@@ -241,9 +251,10 @@ PersistentKeepalive = 25
                         except Exception:
                             pass
                 elif IS_MACOS:
-                    if shutil.which("wg-quick") and conf_path:
+                    wg_bin = self._get_wg_quick_bin()
+                    if wg_bin and conf_path:
                         try:
-                            subprocess.run(["wg-quick", "up", conf_path], capture_output=True)
+                            subprocess.run([wg_bin, "up", conf_path], capture_output=True)
                         except Exception:
                             pass
         else:
@@ -268,9 +279,10 @@ PersistentKeepalive = 25
                 except Exception:
                     pass
             elif IS_MACOS:
-                if shutil.which("wg-quick") and conf_path:
+                wg_bin = self._get_wg_quick_bin()
+                if wg_bin and conf_path:
                     try:
-                        subprocess.run(["wg-quick", "down", conf_path], capture_output=True)
+                        subprocess.run([wg_bin, "down", conf_path], capture_output=True)
                     except Exception:
                         pass
 
