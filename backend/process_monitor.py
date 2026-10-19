@@ -101,6 +101,33 @@ class ProcessMonitor:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return {"name": f"PID-{pid}", "exe": "", "parent": "Unknown"}
 
+    def find_process_for_endpoint(self, client_ip: str, client_port: int) -> Optional[Dict[str, Any]]:
+        """
+        Attempts to correlate a local socket (client_ip, client_port) to the owning process.
+        Returns a dict: {"pid": int|None, "process_name": str, "exe_path": str} or None on failure.
+
+        Note: This function performs a fresh psutil.net_connections() scan and may require
+        elevated permissions on some platforms. Callers should run it in a thread executor
+        to avoid blocking the event loop.
+        """
+        try:
+            conns = psutil.net_connections(kind="inet")
+        except Exception:
+            return None
+
+        for c in conns:
+            laddr = c.laddr
+            if not laddr:
+                continue
+            lip = getattr(laddr, "ip", None)
+            lport = getattr(laddr, "port", None)
+            if lip == client_ip and lport == client_port:
+                pid = c.pid or None
+                info = self.get_process_info(pid)
+                return {"pid": pid, "process_name": info.get("name"), "exe_path": info.get("exe")}
+
+        return None
+
     async def scan_once(self):
         loop = asyncio.get_event_loop()
         try:
