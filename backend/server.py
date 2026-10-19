@@ -390,6 +390,22 @@ async def get_orbot_identity():
 async def cycle_orbot_identity():
     return engine.orbot.request_new_identity()
 
+@app.post("/api/vpn/orbot/start")
+async def start_orbot_service():
+    return engine.orbot.start_tor_service()
+
+@app.post("/api/vpn/orbot/stop")
+async def stop_orbot_service():
+    return engine.orbot.stop_tor_service()
+
+@app.post("/api/vpn/orbot/toggle")
+async def toggle_orbot_service():
+    st = engine.orbot.detect_status()
+    if st.get("is_running"):
+        return engine.orbot.stop_tor_service()
+    else:
+        return engine.orbot.start_tor_service()
+
 # ==================== Port Forwarding & Multi-VPN Relay Endpoints ====================
 
 @app.get("/api/vpn/port-forwarding")
@@ -515,7 +531,7 @@ async def export_csv():
 async def get_updater_status():
     if hasattr(engine, "updater") and engine.updater:
         return engine.updater.get_status()
-    return {"status": "disabled", "current_version": "1.0.6"}
+    return {"status": "disabled", "current_version": "1.0.7"}
 
 @app.post("/api/updater/check")
 async def check_for_updates():
@@ -555,7 +571,7 @@ async def update_updater_settings(payload: UpdaterSettingsRequest):
 async def get_system_service_status():
     return {
         "status": "online",
-        "version": "1.0.6",
+        "version": "1.0.7",
         "persistent_background_mode": True,
         "shield_active": engine.shield_active,
         "protection_mode": engine.protection_mode,

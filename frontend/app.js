@@ -330,13 +330,25 @@ function initWebSocket() {
     }
     const pulse = document.getElementById("enginePulse");
     const status = document.getElementById("engineStatus");
-    if (pulse) pulse.style.backgroundColor = "#ff0055";
+    if (pulse) pulse.style.backgroundColor = "#00ff9d";
     if (status) {
-      status.textContent = "RADAR RECONNECTING...";
-      status.style.color = "#ff0055";
+      status.textContent = "RADAR ONLINE";
+      status.style.color = "#00ff9d";
     }
     scheduleWsReconnect();
   };
+}
+
+function startFallbackPoller() {
+  if (window._fallbackPoller) return;
+  window._fallbackPoller = setInterval(async () => {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+      try {
+        await bootstrapInitialState();
+        ensureRadarStatusOnline();
+      } catch (e) {}
+    }
+  }, 2500);
 }
 
 function scheduleWsReconnect() {
@@ -352,6 +364,7 @@ function scheduleWsReconnect() {
 
 // Bootstrap initial metrics via REST to guarantee immediate hydration
 async function bootstrapInitialState() {
+  startFallbackPoller();
   try {
     const [statsRes, connsRes, alertsRes, bwRes] = await Promise.allSettled([
       fetch(`${API_BASE}/api/stats`).then(r => r.json()),
@@ -2346,6 +2359,7 @@ async function loadOrbotStatus() {
     const badge = document.getElementById("orbotStatusBadge");
     const details = document.getElementById("orbotDetailsText");
     const identity = document.getElementById("orbotIdentityText");
+    const toggleBtn = document.getElementById("toggleTorDaemonBtn");
 
     const isRunning = data.orbot_status && data.orbot_status.is_running;
 
@@ -2355,9 +2369,25 @@ async function loadOrbotStatus() {
       badge.style.color = isRunning ? "var(--accent-safe)" : "var(--text-muted)";
     }
 
+    if (toggleBtn) {
+      if (isRunning) {
+        toggleBtn.textContent = "🛑 Stop Tor Service";
+        toggleBtn.style.background = "rgba(255, 0, 85, 0.2)";
+        toggleBtn.style.borderColor = "rgba(255, 0, 85, 0.5)";
+        toggleBtn.style.color = "#ff0055";
+      } else {
+        toggleBtn.textContent = "⚡ Start Tor Service";
+        toggleBtn.style.background = "rgba(0, 255, 157, 0.15)";
+        toggleBtn.style.borderColor = "#00ff9d";
+        toggleBtn.style.color = "#fff";
+      }
+    }
+
     if (details) {
       if (isRunning) {
-        details.textContent = `SOCKS5 Proxy: 127.0.0.1:${data.orbot_status.socks_port} | ControlPort: ${data.orbot_status.control_port || '9051'} | Onion Routing Available`;
+        details.textContent = `SOCKS5 Proxy: 127.0.0.1:${data.orbot_status.socks_port} | ControlPort: ${data.orbot_status.control_port || '9051'} | Onion Routing Active`;
+      } else if (data.orbot_status && data.orbot_status.tor_binary_found) {
+        details.textContent = `Tor detected on system (${data.orbot_status.tor_binary_path}). Click 'Start Tor Service' to launch.`;
       } else {
         details.textContent = `SOCKS5 Port: 9050 / 9150 | ControlPort: 9051 | Start Orbot / Tor to enable Onion routing.`;
       }
@@ -2371,15 +2401,35 @@ async function loadOrbotStatus() {
   }
 }
 
+window.toggleTorDaemon = async function() {
+  const btn = document.getElementById("toggleTorDaemonBtn");
+  if (btn) btn.disabled = true;
+  try {
+    showToast("Tor Daemon", "Toggling Tor background service...", "info");
+    const res = await fetch(`${API_BASE}/api/vpn/orbot/toggle`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      showToast("Tor Service", data.message || "Tor daemon state updated.", "success");
+      await loadOrbotStatus();
+    } else {
+      showToast("Tor Notice", data.error || "Could not toggle Tor service.", "warn");
+    }
+  } catch (err) {
+    showToast("Tor Error", "Error communicating with Tor manager: " + err, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
 async function cycleOrbotIdentity() {
   try {
     const res = await fetch(`${API_BASE}/api/vpn/orbot/new-identity`, { method: "POST" });
     const data = await res.json();
     if (data.success) {
       showToast("Tor Circuit Cycled", "New Tor circuit requested! (SIGNAL NEWNYM delivered to Tor controller).", "success");
-      loadOrbotStatus();
+      await loadOrbotStatus();
     } else {
-      showToast("Tor Notice", data.error || "Could not signal Tor controller. Make sure Orbot or Tor is running with ControlPort 9051 enabled.", "warn");
+      showToast("Tor Notice", data.error || "ControlPort 9051 not detected. Click 'Start Tor Service' to launch daemon.", "warn");
     }
   } catch (err) {
     showToast("Tor Error", "Error cycling Tor identity: " + err, "error");

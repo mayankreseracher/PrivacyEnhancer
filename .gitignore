@@ -80,3 +80,5 @@ data/trackercontrol.db*
 data/proton_auth.json
 data/wireguard_configs/*.conf
 !data/wireguard_configs/.gitkeep
+data/tor_data/
+data/tor_bundle/

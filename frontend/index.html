@@ -24,7 +24,7 @@
         <span id="hostOsBadge" style="background: rgba(0, 229, 255, 0.12); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--accent-glow); font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; font-weight: 600;">🖥️ OS: Detecting...</span>
         <button class="update-pill-btn" id="updatePillBtn" onclick="openUpdateModal()" title="System Updates & Version" aria-label="System Updates">
           <span class="update-pill-dot" id="updatePillDot"></span>
-          <span id="updatePillText">v1.0.6</span>
+          <span id="updatePillText">v1.0.7</span>
         </button>
         <span title="Continuous Background Service: Closing window keeps DNS & Multi-VPN tunnels running" style="background: rgba(0, 255, 157, 0.12); border: 1px solid rgba(0, 255, 157, 0.3); color: #00ff9d; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: default;">🟢 Svc Active</span>
         <span class="live-pulse" id="enginePulse"></span>
@@ -474,7 +474,10 @@
           </div>
         </div>
 
-        <div style="display: flex; gap: 10px;">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+          <button class="btn-action" id="toggleTorDaemonBtn" onclick="toggleTorDaemon()" style="background: rgba(0, 255, 157, 0.15); border-color: #00ff9d; color: #fff;">
+            ⚡ Start Tor Service
+          </button>
           <button class="btn-action" id="orbotNewIdentityBtn" style="background: rgba(157,78,221,0.2); border-color: #c77dff; color: #fff;">
             🔄 New Identity (NEWNYM)
           </button>
