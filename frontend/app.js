@@ -2697,7 +2697,7 @@ function renderUpdaterUI(data) {
   }
   if (pillDot) {
     pillDot.className = "update-pill-dot" + 
-      (status === "ready" ? " ready" : (isAvailable ? " available" : ""));
+      ((status === "ready" || status === "downloaded") ? " ready" : (isAvailable ? " available" : ""));
   }
 
   // 2. Modal Hero Card Versions
@@ -2723,7 +2723,7 @@ function renderUpdaterUI(data) {
     } else if (status === "downloading") {
       statusPill.className = "badge badge-ad";
       statusPill.innerHTML = `⬇️ Downloading Update (${Math.round(data.download_progress || 0)}%)`;
-    } else if (status === "ready") {
+    } else if ((status === "ready" || status === "downloaded")) {
       statusPill.className = "badge badge-allowed";
       statusPill.style.background = "rgba(0, 255, 157, 0.2)";
       statusPill.style.color = "#00ff9d";
@@ -2783,7 +2783,7 @@ function renderUpdaterUI(data) {
   // 5. Download Progress Bar
   const progressBox = document.getElementById("updateProgressContainer");
   if (progressBox) {
-    if (status === "downloading" || status === "ready") {
+    if (status === "downloading" || (status === "ready" || status === "downloaded")) {
       progressBox.style.display = "block";
       const fill = document.getElementById("updateProgressFill");
       const pct = document.getElementById("updateProgressPercent");
@@ -2791,11 +2791,11 @@ function renderUpdaterUI(data) {
       const speed = document.getElementById("updateSpeedText");
       const bytes = document.getElementById("updateBytesText");
 
-      const prog = status === "ready" ? 100 : Math.min(100, Math.max(0, data.download_progress || 0));
+      const prog = (status === "ready" || status === "downloaded") ? 100 : Math.min(100, Math.max(0, data.download_progress || 0));
       if (fill) fill.style.width = `${prog}%`;
       if (pct) pct.textContent = `${Math.round(prog)}%`;
       if (txt) {
-        txt.textContent = status === "ready" 
+        txt.textContent = (status === "ready" || status === "downloaded") 
           ? "Download Complete! Ready for immediate installation." 
           : "Streaming update package directly from GitHub...";
       }
@@ -2818,14 +2818,14 @@ function renderUpdaterUI(data) {
 
   const downloadBtn = document.getElementById("updateDownloadBtn");
   if (downloadBtn) {
-    downloadBtn.style.display = (isAvailable && status !== "downloading" && status !== "ready" && status !== "applying") 
+    downloadBtn.style.display = (isAvailable && status !== "downloading" && (status !== "ready" && status !== "downloaded") && status !== "applying") 
       ? "inline-flex" 
       : "none";
   }
 
   const applyBtn = document.getElementById("updateApplyBtn");
   if (applyBtn) {
-    applyBtn.style.display = (status === "ready") ? "inline-flex" : "none";
+    applyBtn.style.display = ((status === "ready" || status === "downloaded")) ? "inline-flex" : "none";
   }
 
   const ghLink = document.getElementById("updateGithubLink");

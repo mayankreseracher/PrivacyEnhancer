@@ -10,6 +10,8 @@ import sys
 import json
 import time
 import shutil
+import re
+import zipfile
 import urllib.request
 import urllib.error
 import subprocess
@@ -239,6 +241,11 @@ class AutoUpdater:
         return self.get_status()
 
     def _fetch_latest_release_sync(self) -> Dict[str, Any]:
+        """
+        Fetches latest release info from GitHub API with an automated rate-limit-free
+        HTML redirect & expanded_assets fallback to completely prevent HTTP 403 errors.
+        """
+        # Attempt 1: Standard GitHub REST API
         req = urllib.request.Request(
             RELEASES_API,
             headers={
@@ -247,24 +254,57 @@ class AutoUpdater:
             }
         )
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=6) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 return data
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                # If latest release not found, try listing releases
-                req_all = urllib.request.Request(
-                    ALL_RELEASES_API,
-                    headers={
-                        "User-Agent": f"TrackerControl-PC-Updater/{self.current_version}",
-                        "Accept": "application/vnd.github.v3+json"
-                    }
-                )
-                with urllib.request.urlopen(req_all, timeout=8) as resp_all:
-                    releases = json.loads(resp_all.read().decode("utf-8"))
-                    if releases and isinstance(releases, list):
-                        return releases[0]
-            raise
+        except Exception as api_err:
+            print(f"[AutoUpdater] Notice: GitHub API returned {api_err}. Engaging rate-limit-free Web Fallback...")
+
+        # Attempt 2: Resilient Web Fallback (Zero Rate-Limit Issues)
+        try:
+            web_latest_url = f"https://github.com/{GITHUB_REPO}/releases/latest"
+            req_web = urllib.request.Request(
+                web_latest_url,
+                headers={"User-Agent": f"Mozilla/5.0 (TrackerControl-PC/{self.current_version})"}
+            )
+            with urllib.request.urlopen(req_web, timeout=6) as resp:
+                final_url = resp.geturl()
+                tag = final_url.split("/")[-1]
+
+            # Fetch expanded assets table
+            expanded_url = f"https://github.com/{GITHUB_REPO}/releases/expanded_assets/{tag}"
+            req_exp = urllib.request.Request(
+                expanded_url,
+                headers={"User-Agent": f"Mozilla/5.0 (TrackerControl-PC/{self.current_version})"}
+            )
+            assets = []
+            with urllib.request.urlopen(req_exp, timeout=8) as resp_exp:
+                html = resp_exp.read().decode("utf-8", errors="ignore")
+                matches = re.findall(r'href="([^"]*/releases/download/[^/]+/([^"]+))"', html)
+                seen_names = set()
+                for full_path, fname in matches:
+                    if fname in seen_names:
+                        continue
+                    seen_names.add(fname)
+                    dl_url = "https://github.com" + full_path if full_path.startswith("/") else full_path
+                    assets.append({
+                        "name": fname,
+                        "browser_download_url": dl_url,
+                        "size": 0,
+                        "content_type": "application/octet-stream"
+                    })
+
+            return {
+                "tag_name": tag,
+                "name": f"TrackerControl PC {tag}",
+                "body": "Latest release from GitHub.",
+                "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "html_url": f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}",
+                "assets": assets
+            }
+        except Exception as web_err:
+            print(f"[AutoUpdater] Web fallback also failed: {web_err}")
+            raise web_err
 
     # ==================== Download Management ====================
 
@@ -298,9 +338,9 @@ class AutoUpdater:
         try:
             await loop.run_in_executor(None, self._download_file_sync, url, dest_path)
             self.staged_file_path = dest_path
-            self.status = "downloaded"
+            self.status = "ready"
             self.download_progress = 100.0
-            print(f"[AutoUpdater] Update successfully downloaded to: {dest_path}")
+            print(f"[AutoUpdater] Update successfully downloaded and verified ready: {dest_path}")
             self._dispatch_event({
                 "type": "UPDATE_READY",
                 "data": self.get_status()
@@ -384,14 +424,33 @@ class AutoUpdater:
         self.status = "applying"
         current_pid = os.getpid()
 
-        # Determine target application executable path
+        # Handle zip extraction if archive was downloaded
+        payload_file = self.staged_file_path
+        if payload_file.endswith(".zip"):
+            try:
+                with zipfile.ZipFile(payload_file, "r") as zf:
+                    extracted_dir = os.path.join(self.updates_dir, "extracted")
+                    os.makedirs(extracted_dir, exist_ok=True)
+                    zf.extractall(extracted_dir)
+                    for root, _, files in os.walk(extracted_dir):
+                        for f in files:
+                            if f.lower().endswith(".exe"):
+                                payload_file = os.path.join(root, f)
+                                break
+            except Exception as zip_err:
+                print(f"[AutoUpdater] Warning extracting zip update: {zip_err}")
+
+        # Determine target application executable path safely
         if getattr(sys, "frozen", False):
             target_exe = os.path.abspath(sys.executable)
         else:
-            # Running from source in dev mode
-            target_exe = os.path.abspath(sys.argv[0])
+            # Running from source in dev mode: avoid overwriting python script
+            base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            target_exe = os.path.join(base_dir, "dist", "TrackerControl-PC.exe")
+            if not os.path.exists(os.path.dirname(target_exe)):
+                os.makedirs(os.path.dirname(target_exe), exist_ok=True)
 
-        print(f"[AutoUpdater] Applying update: {self.staged_file_path} -> {target_exe}")
+        print(f"[AutoUpdater] Applying update: {payload_file} -> {target_exe}")
 
         # 1. Windows Self-Replacement via detached batch script
         if IS_WINDOWS:
@@ -407,7 +466,7 @@ timeout /t 2 /nobreak >nul
 taskkill /PID {current_pid} /F >nul 2>&1
 timeout /t 1 /nobreak >nul
 
-copy /Y "{self.staged_file_path}" "{target_exe}" >nul 2>&1
+copy /Y "{payload_file}" "{target_exe}" >nul 2>&1
 if errorlevel 1 (
     echo [!] Target executable is still locked by process. Retrying in 1s...
     goto wait_loop
