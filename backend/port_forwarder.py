@@ -455,11 +455,16 @@ class PortForwarder:
                         pass
                     return
 
-                async def pipe(reader, writer):
+                async def pipe(reader, writer, is_client):
                     try:
                         while True:
                             data = await reader.read(8192)
                             if not data:
+                                if hasattr(writer, "can_write_eof") and writer.can_write_eof():
+                                    try:
+                                        writer.write_eof()
+                                    except Exception:
+                                        pass
                                 break
                             writer.write(data)
                             await writer.drain()
@@ -467,13 +472,14 @@ class PortForwarder:
                     except Exception:
                         pass
                     finally:
-                        try:
-                            writer.close()
-                            await writer.wait_closed()
-                        except Exception:
-                            pass
+                        if not is_client:
+                            try:
+                                writer.close()
+                                await writer.wait_closed()
+                            except Exception:
+                                pass
 
-                await asyncio.gather(pipe(client_reader, target_writer), pipe(target_reader, client_writer))
+                await asyncio.gather(pipe(client_reader, target_writer, True), pipe(target_reader, client_writer, False))
 
             try:
                 tcp_server = await asyncio.start_server(handle_client, "0.0.0.0", listen_port)

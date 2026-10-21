@@ -50,7 +50,7 @@ class PlatformHelper:
         os.makedirs(data_dir, exist_ok=True)
 
         # Seed initial static JSON files if missing
-        for fname in ["trackers.json", "companies.json", "windows_telemetry.json"]:
+        for fname in ["trackers.json", "companies.json", "windows_telemetry.json", "port_forwarding.json", "wireguard_tunnels.json", "app_vpn_bindings.json"]:
             target = os.path.join(data_dir, fname)
             if not os.path.exists(target):
                 src = PlatformHelper.get_resource_path(os.path.join("data", fname))

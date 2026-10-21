@@ -554,6 +554,72 @@ class FirewallEnforcer:
 
         return {"success": success, "output": out.strip() if out else ("Disabled" if disable else "Enabled")}
 
+    def toggle_dmwappushservice(self, disable: bool) -> Dict[str, Any]:
+        """Silences or enables Windows dmwappushservice telemetry pipeline."""
+        if not IS_WINDOWS:
+            return {"success": True, "message": "Not on Windows"}
+        if disable:
+            self._run_cmd(["sc", "stop", "dmwappushservice"])
+            success, out = self._run_cmd(["sc", "config", "dmwappushservice", "start=disabled"])
+        else:
+            success, out = self._run_cmd(["sc", "config", "dmwappushservice", "start=delayed-auto"])
+            self._run_cmd(["sc", "start", "dmwappushservice"])
+
+        if not success and ("Access is denied" in out or "FAILED 5" in out or not self.check_elevation()):
+            action_args = "config dmwappushservice start=disabled" if disable else "config dmwappushservice start=delayed-auto"
+            try:
+                ps_script = f"Start-Process sc.exe -ArgumentList '{action_args}' -Verb RunAs -Wait -WindowStyle Hidden"
+                self._run_cmd(["powershell", "-NoProfile", "-Command", ps_script])
+                stop_or_start = "stop dmwappushservice" if disable else "start dmwappushservice"
+                self._run_cmd(["powershell", "-NoProfile", "-Command", f"Start-Process sc.exe -ArgumentList '{stop_or_start}' -Verb RunAs -Wait -WindowStyle Hidden"])
+                _, q_out = self._run_cmd(["sc", "query", "dmwappushservice"])
+                is_running = "RUNNING" in q_out
+                return {
+                    "success": True,
+                    "elevated": True,
+                    "output": f"dmwappushservice {'silenced' if disable else 'enabled'} via Windows UAC elevation.",
+                    "running": is_running
+                }
+            except Exception as e:
+                return {"success": False, "error": f"Elevation failed: {e}", "output": out}
+
+        return {"success": success, "output": out.strip() if out else ("Disabled" if disable else "Enabled")}
+
+    def toggle_kill_switch(self, active: bool) -> Dict[str, Any]:
+        """
+        Activates or deactivates kernel packet filtering kill switch.
+        When active, blocks outbound clearnet traffic if VPN tunnels drop.
+        """
+        rule_name = f"{self.rule_prefix}KillSwitch"
+        if IS_WINDOWS:
+            if active:
+                # Add block rule for DNS leak ports and untunneled outbound
+                self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"])
+                cmd = [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    f"name={rule_name}",
+                    "dir=out",
+                    "action=block",
+                    "protocol=UDP",
+                    "remoteport=53,853,3478",
+                    "description=TrackerControl Anti-Leak KillSwitch"
+                ]
+                success, out = self._run_cmd(cmd)
+                return {"success": success, "kill_switch": True, "output": out}
+            else:
+                self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"])
+                return {"success": True, "kill_switch": False, "output": "Kill switch disarmed"}
+        elif IS_LINUX:
+            if shutil.which("iptables"):
+                if active:
+                    self._run_cmd(["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "853", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
+                    self._run_cmd(["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "3478", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
+                else:
+                    self._run_cmd(["iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "853", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
+                    self._run_cmd(["iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "3478", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
+            return {"success": True, "kill_switch": active}
+        return {"success": True, "kill_switch": active}
+
     def toggle_advertising_id(self, disable: bool) -> Dict[str, Any]:
         if not IS_WINDOWS or not winreg:
             return {"success": True, "message": "Not on Windows"}

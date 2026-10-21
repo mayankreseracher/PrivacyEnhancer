@@ -37,6 +37,9 @@ class TrackerEngine:
         self.updater = AutoUpdater(database=self.database, event_callback=self.on_updater_event)
         self._updater_task = None
         
+        self.loop = None
+        self.kill_switch_active = False
+        
         # State
         self.protection_mode = "MAX_PRIVACY" # MAX_PRIVACY, BALANCED, AUDIT_ONLY, LOCKDOWN
         self.shield_active = True
@@ -82,6 +85,23 @@ class TrackerEngine:
 
         self._dns_task = None
         self._monitor_task = None
+
+    def _dispatch_coro(self, coro):
+        """Thread-safe coroutine scheduler for WebSocket broadcasts across background threads."""
+        if not self.active_websockets:
+            return
+        if self.loop and self.loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(coro, self.loop)
+                return
+            except Exception:
+                pass
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(coro)
+        except Exception:
+            pass
 
     def on_event(self, event: Dict[str, Any]):
         """Called whenever DNS Proxy or Process Monitor records a network connection."""
@@ -133,25 +153,13 @@ class TrackerEngine:
             }
             self._add_alert(alert)
 
-        if self.active_websockets:
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.broadcast_message({"type": "NEW_CONNECTION", "data": event}))
-            except Exception:
-                pass
+        self._dispatch_coro(self.broadcast_message({"type": "NEW_CONNECTION", "data": event}))
 
     def _add_alert(self, alert: Dict[str, Any]):
         self.alerts.insert(0, alert)
         if len(self.alerts) > self.max_alerts:
             self.alerts.pop()
-        if self.active_websockets:
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.broadcast_message({"type": "SECURITY_ALERT", "data": alert}))
-            except Exception:
-                pass
+        self._dispatch_coro(self.broadcast_message({"type": "SECURITY_ALERT", "data": alert}))
 
     def on_updater_event(self, event: Dict[str, Any]):
         """Dispatches updater events (e.g. UPDATE_AVAILABLE, UPDATE_PROGRESS, UPDATE_READY, UPDATE_STATUS)."""
@@ -172,13 +180,7 @@ class TrackerEngine:
             }
             self._add_alert(alert)
 
-        if self.active_websockets:
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.broadcast_message(event))
-            except Exception:
-                pass
+        self._dispatch_coro(self.broadcast_message(event))
 
     async def broadcast_message(self, message_dict: Dict[str, Any]):
         dead_sockets = set()
@@ -274,9 +276,16 @@ class TrackerEngine:
         elif hasattr(self, "process_monitor") and self.process_monitor:
             self.process_monitor.set_shield_active(active)
 
+    def toggle_kill_switch(self, active: bool) -> Dict[str, Any]:
+        self.kill_switch_active = active
+        if hasattr(self.firewall, "toggle_kill_switch"):
+            self.firewall.toggle_kill_switch(active)
+        return {"success": True, "kill_switch_active": self.kill_switch_active}
+
     def get_stats(self) -> Dict[str, Any]:
         stats = self.database.get_stats()
         stats["shield_active"] = self.shield_active
+        stats["kill_switch_active"] = self.kill_switch_active
         stats["protection_mode"] = self.protection_mode
         stats["os_privacy"] = self.firewall.get_os_privacy_status()
         stats["windows_privacy"] = self.firewall.get_windows_privacy_status()
@@ -295,6 +304,7 @@ class TrackerEngine:
     async def start(self):
         print(f"[Engine] Initializing TrackerControl PC Subsystems on {PlatformHelper.get_os_type()}...")
         loop = asyncio.get_event_loop()
+        self.loop = loop
 
         # Start DNS Proxy
         try:
@@ -369,6 +379,16 @@ class TrackerEngine:
                 self.firewall.flush_all_tc_rules()
             except Exception as e:
                 print(f"[Engine] Notice during firewall cleanup: {e}")
+        if hasattr(self, "wireguard") and self.wireguard and hasattr(self.wireguard, "proxy_manager"):
+            try:
+                await self.wireguard.proxy_manager.stop_all()
+            except Exception:
+                pass
+        if hasattr(self, "orbot") and self.orbot:
+            try:
+                self.orbot.stop_tor_service()
+            except Exception:
+                pass
 
         # Close all active WebSockets gracefully
         for ws in list(self.active_websockets):

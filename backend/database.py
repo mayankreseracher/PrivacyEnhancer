@@ -196,10 +196,11 @@ class Database:
             """, (exe_path, process_name, display_name, now, now, control_mode))
             conn.commit()
 
-    def get_app_mode(self, exe_path: str, process_name: str) -> str:
+    def get_app_mode(self, exe_path: str, process_name: Optional[str] = None) -> str:
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT control_mode FROM apps WHERE exe_path = ? OR process_name = ?", (exe_path, process_name))
+            p_name = process_name or exe_path
+            cursor.execute("SELECT control_mode FROM apps WHERE exe_path = ? OR process_name = ?", (exe_path, p_name))
             row = cursor.fetchone()
             if row:
                 return row["control_mode"]

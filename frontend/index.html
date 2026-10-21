@@ -24,7 +24,7 @@
         <span id="hostOsBadge" style="background: rgba(0, 229, 255, 0.12); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--accent-glow); font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; font-weight: 600;">🖥️ OS: Detecting...</span>
         <button class="update-pill-btn" id="updatePillBtn" onclick="openUpdateModal()" title="System Updates & Version" aria-label="System Updates">
           <span class="update-pill-dot" id="updatePillDot"></span>
-          <span id="updatePillText">v1.0.7</span>
+          <span id="updatePillText">v1.0.8</span>
         </button>
         <span title="Continuous Background Service: Closing window keeps DNS & Multi-VPN tunnels running" style="background: rgba(0, 255, 157, 0.12); border: 1px solid rgba(0, 255, 157, 0.3); color: #00ff9d; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: default;">🟢 Svc Active</span>
         <span class="live-pulse" id="enginePulse"></span>
@@ -242,7 +242,7 @@
 
         <div style="display: flex; gap: 10px;">
           <button class="btn-action" id="toggleStreamBtn">⏸️ Pause Stream</button>
-          <a href="/api/export/csv" class="btn-action" style="text-decoration: none;">📥 Export CSV</a>
+          <a href="#" onclick="window.open(API_BASE + '/api/export/csv', '_blank'); return false;" class="btn-action" style="text-decoration: none;">📥 Export CSV</a>
         </div>
       </div>
 
@@ -877,7 +877,7 @@
             <div class="update-version-split">
               <div class="version-box">
                 <span class="version-label">Current Version</span>
-                <span class="version-value" id="updateCurrentVersion">v1.0.6</span>
+                <span class="version-value" id="updateCurrentVersion">v1.0.8</span>
               </div>
               <div class="version-arrow">➔</div>
               <div class="version-box">

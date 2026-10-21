@@ -373,10 +373,14 @@ class AppDiscovery:
                 clean_name = os.path.splitext(p_name)[0].capitalize()
                 category = guess_app_category(clean_name, p_name)
 
+                resolved_exe = p_exe
+                if not resolved_exe or not os.path.isabs(resolved_exe):
+                    resolved_exe = shutil.which(p_name) or p_exe or p_name
+
                 running_apps.append({
                     "name": clean_name,
                     "process_name": p_name,
-                    "exe_path": p_exe or p_name,
+                    "exe_path": resolved_exe,
                     "publisher": "Active Running Process",
                     "version": "Live",
                     "category": category,

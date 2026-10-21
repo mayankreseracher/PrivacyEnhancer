@@ -1610,21 +1610,21 @@ main {
     gap: 6px;
   }
 
-  .stats-grid {
+  .stats-grid, .telemetry-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .speedometers-container {
+  .speedometers-container, .glasswire-speedometer-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 600px) {
-  .stats-grid {
+  .stats-grid, .telemetry-grid {
     grid-template-columns: 1fr;
   }
 
-  .speedometers-container {
+  .speedometers-container, .glasswire-speedometer-grid {
     grid-template-columns: 1fr;
   }
 

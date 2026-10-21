@@ -18,7 +18,7 @@ from .platform_helper import PlatformHelper
 
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
-app = FastAPI(title="TrackerControl PC", version="1.0.6")
+app = FastAPI(title="TrackerControl PC", version="1.0.8")
 
 # Enable CORS (allow all origins with credentials=False for security)
 app.add_middleware(
@@ -203,6 +203,8 @@ async def toggle_telemetry(payload: TelemetryToggleRequest):
     tgt = payload.service.lower()
     if tgt == "diagtrack":
         return engine.firewall.toggle_diagtrack(payload.disable)
+    elif tgt == "dmwappushservice":
+        return engine.firewall.toggle_dmwappushservice(payload.disable)
     elif tgt == "advertising_id":
         return engine.firewall.toggle_advertising_id(payload.disable)
     elif PlatformHelper.get_os_type() == "macOS":
@@ -216,14 +218,17 @@ async def get_windows_privacy():
     return engine.firewall.get_windows_privacy_status()
 
 class WindowsPrivacyToggleRequest(BaseModel):
-    target: str # 'diagtrack', 'advertising_id'
+    target: str # 'diagtrack', 'dmwappushservice', 'advertising_id'
     disable: bool
 
 @app.post("/api/windows-privacy/toggle")
 async def toggle_windows_privacy(payload: WindowsPrivacyToggleRequest):
-    if payload.target == "diagtrack":
+    tgt = payload.target.lower()
+    if tgt == "diagtrack":
         return engine.firewall.toggle_diagtrack(payload.disable)
-    elif payload.target == "advertising_id":
+    elif tgt == "dmwappushservice":
+        return engine.firewall.toggle_dmwappushservice(payload.disable)
+    elif tgt == "advertising_id":
         return engine.firewall.toggle_advertising_id(payload.disable)
     return {"success": False, "error": "Unknown target"}
 # ==================== WireGuard & Proton VPN ====================
@@ -333,6 +338,17 @@ async def get_vpn_app_bindings():
     """Returns matrix of all apps bound to specific VPN tunnels."""
     return engine.wireguard.get_all_bindings()
 
+class KillSwitchToggleRequest(BaseModel):
+    active: bool
+
+@app.get("/api/vpn/killswitch")
+async def get_kill_switch_status():
+    return {"kill_switch_active": getattr(engine, "kill_switch_active", False)}
+
+@app.post("/api/vpn/killswitch")
+async def toggle_kill_switch(payload: KillSwitchToggleRequest):
+    return engine.toggle_kill_switch(payload.active)
+
 class LaunchAppVpnRequest(BaseModel):
     process_name: str
     exe_path: Optional[str] = None
@@ -340,7 +356,7 @@ class LaunchAppVpnRequest(BaseModel):
 
 @app.post("/api/vpn/launch-app")
 async def launch_app_with_vpn(payload: LaunchAppVpnRequest):
-    """Launches an application with proxy routing flags if bound to a VPN tunnel."""
+    """Launches an application with proxy routing flags & environment variables if bound to a VPN tunnel."""
     import subprocess
     proc_name = payload.process_name.lower().strip()
     tunnel_id = payload.tunnel_id or engine.wireguard.app_bindings.get(proc_name)
@@ -361,11 +377,19 @@ async def launch_app_with_vpn(payload: LaunchAppVpnRequest):
     proxy_url = tunnel_info.get("proxy_url") if tunnel_info else ("socks5://127.0.0.1:9050" if tunnel_id == "orbot" else None)
 
     cmd = [exe_path]
+    env = os.environ.copy()
     if proxy_url:
         cmd.append(f"--proxy-server={proxy_url}")
+        # Inject standard proxy environment variables so non-Chromium apps can inherit tunnel routing
+        env["HTTP_PROXY"] = proxy_url
+        env["HTTPS_PROXY"] = proxy_url
+        env["ALL_PROXY"] = proxy_url
+        env["http_proxy"] = proxy_url
+        env["https_proxy"] = proxy_url
+        env["all_proxy"] = proxy_url
 
     try:
-        proc = subprocess.Popen(cmd)
+        proc = subprocess.Popen(cmd, env=env)
         return {
             "success": True,
             "pid": proc.pid,
@@ -531,7 +555,7 @@ async def export_csv():
 async def get_updater_status():
     if hasattr(engine, "updater") and engine.updater:
         return engine.updater.get_status()
-    return {"status": "disabled", "current_version": "1.0.7"}
+    return {"status": "disabled", "current_version": "1.0.8"}
 
 @app.post("/api/updater/check")
 async def check_for_updates():
@@ -571,7 +595,7 @@ async def update_updater_settings(payload: UpdaterSettingsRequest):
 async def get_system_service_status():
     return {
         "status": "online",
-        "version": "1.0.7",
+        "version": "1.0.8",
         "persistent_background_mode": True,
         "shield_active": engine.shield_active,
         "protection_mode": engine.protection_mode,

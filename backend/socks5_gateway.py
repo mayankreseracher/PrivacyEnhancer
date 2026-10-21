@@ -104,15 +104,20 @@ class Socks5RelayServer:
 
             try:
                 if self.bind_interface_ip:
-                    # Create socket bound to virtual VPN IP
+                    # Create socket bound to virtual VPN IP (anti-leak protection: never fallback to clearnet)
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.setblocking(False)
                     try:
-                        # Strip CIDR if present (e.g. 10.2.0.2/32 -> 10.2.0.2)
                         clean_ip = self.bind_interface_ip.split("/")[0].strip()
                         sock.bind((clean_ip, 0))
-                    except Exception:
-                        pass  # Interface may not have bound address yet, proceed
+                    except Exception as bind_err:
+                        # Anti-leak sentry: If binding to the specified VPN interface fails,
+                        # REJECT connection to prevent silent clearnet data leakage
+                        print(f"[Socks5Gateway] Anti-Leak Protection: Cannot bind to VPN interface {clean_ip} ({bind_err}). Rejecting clearnet leak.")
+                        client_writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
+                        await client_writer.drain()
+                        client_writer.close()
+                        return
                     
                     await asyncio.wait_for(
                         loop.sock_connect(sock, (dest_host, dest_port)),

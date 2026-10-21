@@ -330,10 +330,10 @@ function initWebSocket() {
     }
     const pulse = document.getElementById("enginePulse");
     const status = document.getElementById("engineStatus");
-    if (pulse) pulse.style.backgroundColor = "#00ff9d";
+    if (pulse) pulse.style.backgroundColor = "#ffaa00";
     if (status) {
-      status.textContent = "RADAR ONLINE";
-      status.style.color = "#00ff9d";
+      status.textContent = "RADAR RECONNECTING...";
+      status.style.color = "#ffaa00";
     }
     scheduleWsReconnect();
   };
@@ -1838,13 +1838,27 @@ window.toggleMasterVpn = async function() {
   }
 };
 
-window.toggleKillSwitch = function(enabled) {
+window.toggleKillSwitch = async function(enabled) {
   const lbl = document.getElementById("killSwitchLabel");
   if (lbl) {
     lbl.textContent = enabled ? "ACTIVE" : "DISABLED";
     lbl.style.color = enabled ? "#00ff9d" : "var(--text-muted)";
   }
-  showToast("Kill Switch", enabled ? "Kill Switch armed: Outbound packets will drop if VPN disconnects." : "Kill Switch disarmed.", enabled ? "shield" : "warn");
+  try {
+    const res = await fetch(`${API_BASE}/api/vpn/killswitch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: enabled })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("Kill Switch", enabled ? "Anti-Leak Kill Switch armed: Leak ports dropped." : "Kill Switch disarmed.", enabled ? "shield" : "warn");
+    } else {
+      showToast("Kill Switch", data.output || "Kill switch status updated", "info");
+    }
+  } catch (e) {
+    showToast("Kill Switch Error", "Could not apply firewall rule: " + e, "error");
+  }
 };
 
 function renderProtonAuthBanner() {
@@ -2130,7 +2144,10 @@ function renderAppRoutingMatrix() {
       statusBadge = `<span class="badge badge-allowed" style="background: rgba(0,255,157,0.15); color: #00ff9d; border: 1px solid rgba(0,255,157,0.3);">
         ${flag} Routed: ${escapeHtml(tname)}
       </span>`;
-      launchBtn = `<button class="btn-action" style="padding: 3px 8px; font-size: 0.72rem; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px;" onclick="launchAppWithVpn('${escapeHtml(app.process_name)}', '${escapeHtml(app.exe_path || '')}', '${escapeHtml(boundTid)}')">
+      const safeProc = (app.process_name || "").replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+      const safeExe = (app.exe_path || "").replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+      const safeTid = (boundTid || "").replace(/'/g, "\\'");
+      launchBtn = `<button class="btn-action" style="padding: 3px 8px; font-size: 0.72rem; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px;" onclick="launchAppWithVpn('${safeProc}', '${safeExe}', '${safeTid}')">
         <span>🚀</span> Launch via VPN
       </button>`;
     }

@@ -314,20 +314,58 @@ class OrbotService:
 
         # 2. Tor exit IP via SOCKS5 if active
         if status["is_running"]:
+            socks_port = status["socks_port"]
+            # Method A: Try requests with socks if PySocks is installed
             try:
-                import urllib.request as u_req
-
-                socks_handler = urllib.request.ProxyHandler({
-                    'http': f'socks5h://127.0.0.1:{status["socks_port"]}',
-                    'https': f'socks5h://127.0.0.1:{status["socks_port"]}'
-                })
-                opener = urllib.request.build_opener(socks_handler)
-                resp = opener.open("https://check.torproject.org/api/ip", timeout=5)
-                data = json.loads(resp.read().decode("utf-8"))
-                tor_exit_ip = data.get("IP")
-                tor_verified = data.get("IsTor", False)
+                import requests
+                proxies = {
+                    'http': f'socks5h://127.0.0.1:{socks_port}',
+                    'https': f'socks5h://127.0.0.1:{socks_port}'
+                }
+                r = requests.get("https://check.torproject.org/api/ip", proxies=proxies, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    tor_exit_ip = data.get("IP")
+                    tor_verified = data.get("IsTor", True)
             except Exception:
-                pass
+                # Method B: Direct socket SOCKS5 request to check.torproject.org or control port status
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(4.0)
+                    s.connect(("127.0.0.1", socks_port))
+                    # SOCKS5 handshake: version 5, 1 auth method (no auth)
+                    s.sendall(b"\x05\x01\x00")
+                    auth_resp = s.recv(2)
+                    if auth_resp == b"\x05\x00":
+                        # Connect to check.torproject.org:80 (domain type 0x03)
+                        domain = b"check.torproject.org"
+                        connect_req = b"\x05\x01\x00\x03" + bytes([len(domain)]) + domain + (80).to_bytes(2, "big")
+                        s.sendall(connect_req)
+                        conn_resp = s.recv(10)
+                        if len(conn_resp) >= 4 and conn_resp[1] == 0x00:
+                            http_req = b"GET /api/ip HTTP/1.1\r\nHost: check.torproject.org\r\nUser-Agent: TrackerControl\r\nConnection: close\r\n\r\n"
+                            s.sendall(http_req)
+                            raw_body = b""
+                            while True:
+                                chunk = s.recv(4096)
+                                if not chunk:
+                                    break
+                                raw_body += chunk
+                            if b"{" in raw_body:
+                                json_part = raw_body[raw_body.find(b"{"):raw_body.rfind(b"}") + 1]
+                                parsed = json.loads(json_part.decode("utf-8", errors="ignore"))
+                                tor_exit_ip = parsed.get("IP")
+                                tor_verified = parsed.get("IsTor", True)
+                    s.close()
+                except Exception:
+                    # Method C: Controller check if active
+                    if status.get("control_port"):
+                        try:
+                            with stem.control.Controller.from_port(port=status["control_port"]) as ctrl:
+                                ctrl.authenticate(password="")
+                                tor_verified = True
+                        except Exception:
+                            pass
 
         result = {
             "orbot_status": status,

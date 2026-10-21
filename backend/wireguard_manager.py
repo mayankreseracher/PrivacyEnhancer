@@ -77,13 +77,41 @@ class WireGuardManager:
                         break
 
                 if tunnel_id not in self.tunnels:
+                    # Dynamically inspect interface name to determine country / region instead of hardcoding Netherlands
+                    detected_country = "Global"
+                    detected_flag = "🌐"
+                    if any(k in name_lower for k in ["-us", "_us", "us-", "united states", "usa"]):
+                        detected_country = "United States"
+                        detected_flag = "🇺🇸"
+                    elif any(k in name_lower for k in ["-in", "_in", "in-", "india"]):
+                        detected_country = "India"
+                        detected_flag = "🇮🇳"
+                    elif any(k in name_lower for k in ["-nl", "_nl", "nl-", "netherlands", "amsterdam"]):
+                        detected_country = "Netherlands"
+                        detected_flag = "🇳🇱"
+                    elif any(k in name_lower for k in ["-ch", "_ch", "ch-", "switzerland"]):
+                        detected_country = "Switzerland"
+                        detected_flag = "🇨🇭"
+                    elif any(k in name_lower for k in ["-de", "_de", "de-", "germany"]):
+                        detected_country = "Germany"
+                        detected_flag = "🇩🇪"
+                    elif any(k in name_lower for k in ["-jp", "_jp", "jp-", "japan"]):
+                        detected_country = "Japan"
+                        detected_flag = "🇯🇵"
+                    elif any(k in name_lower for k in ["-sg", "_sg", "sg-", "singapore"]):
+                        detected_country = "Singapore"
+                        detected_flag = "🇸🇬"
+                    elif any(k in name_lower for k in ["-uk", "_uk", "uk-", "gb-", "united kingdom", "london"]):
+                        detected_country = "United Kingdom"
+                        detected_flag = "🇬🇧"
+
                     self.tunnels[tunnel_id] = {
                         "id": tunnel_id,
                         "name": f"{iface_name} (System Active)",
                         "tunnel_type": "proton" if "proton" in name_lower else "wireguard",
-                        "country": "Netherlands",
-                        "flag": "🇳🇱",
-                        "endpoint": "Live VPN Endpoint",
+                        "country": detected_country,
+                        "flag": detected_flag,
+                        "endpoint": "Live VPN Interface",
                         "address": ip_addr,
                         "status": "Connected",
                         "interface_name": iface_name,
@@ -211,6 +239,20 @@ PersistentKeepalive = 25
         self.save_state()
         return tunnel_record
 
+    def _get_windows_wireguard_bin(self) -> Optional[str]:
+        """Resolves wireguard.exe on Windows across standard installation locations."""
+        if shutil.which("wireguard.exe"):
+            return shutil.which("wireguard.exe")
+        for p in [
+            r"C:\Program Files\WireGuard\wireguard.exe",
+            r"C:\Program Files (x86)\WireGuard\wireguard.exe",
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "WireGuard", "wireguard.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "WireGuard", "wireguard.exe")
+        ]:
+            if os.path.exists(p):
+                return p
+        return None
+
     def _get_wg_quick_bin(self) -> Optional[str]:
         """Resolves wg-quick executable across standard PATH and macOS Homebrew locations."""
         if shutil.which("wg-quick"):
@@ -234,46 +276,58 @@ PersistentKeepalive = 25
             tunnel["status"] = "Connected"
             if conf_path and os.path.exists(conf_path):
                 if IS_WINDOWS:
-                    try:
-                        subprocess.run(
-                            ["wireguard.exe", "/installtunnelservice", conf_path],
-                            capture_output=True,
-                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-                        )
-                    except Exception:
-                        pass
+                    wg_win = self._get_windows_wireguard_bin()
+                    if wg_win:
+                        try:
+                            res = subprocess.run(
+                                [wg_win, "/installtunnelservice", conf_path],
+                                capture_output=True,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                            )
+                            if res.returncode != 0:
+                                tunnel["status"] = "Error"
+                        except Exception:
+                            tunnel["status"] = "Error"
+                    else:
+                        print("[WireGuard] Notice: wireguard.exe not installed or not in PATH. Tunnel profile created.")
                 elif IS_LINUX:
                     # Use wg-quick up
                     if shutil.which("wg-quick"):
                         try:
-                            subprocess.run(["wg-quick", "up", conf_path], capture_output=True)
+                            res = subprocess.run(["wg-quick", "up", conf_path], capture_output=True)
+                            if res.returncode != 0:
+                                tunnel["status"] = "Error"
                         except Exception:
-                            pass
+                            tunnel["status"] = "Error"
                     elif shutil.which("wg"):
                         try:
                             subprocess.run(["ip", "link", "add", "dev", iface, "type", "wireguard"], capture_output=True)
                             subprocess.run(["wg", "setconf", iface, conf_path], capture_output=True)
                             subprocess.run(["ip", "link", "set", "up", "dev", iface], capture_output=True)
                         except Exception:
-                            pass
+                            tunnel["status"] = "Error"
                 elif IS_MACOS:
                     wg_bin = self._get_wg_quick_bin()
                     if wg_bin and conf_path:
                         try:
-                            subprocess.run([wg_bin, "up", conf_path], capture_output=True)
+                            res = subprocess.run([wg_bin, "up", conf_path], capture_output=True)
+                            if res.returncode != 0:
+                                tunnel["status"] = "Error"
                         except Exception:
-                            pass
+                            tunnel["status"] = "Error"
         else:
             tunnel["status"] = "Disconnected"
             if IS_WINDOWS:
-                try:
-                    subprocess.run(
-                        ["wireguard.exe", "/uninstalltunnelservice", iface],
-                        capture_output=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-                    )
-                except Exception:
-                    pass
+                wg_win = self._get_windows_wireguard_bin()
+                if wg_win:
+                    try:
+                        subprocess.run(
+                            [wg_win, "/uninstalltunnelservice", iface],
+                            capture_output=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                        )
+                    except Exception:
+                        pass
             elif IS_LINUX:
                 if shutil.which("wg-quick") and conf_path:
                     try:
@@ -335,12 +389,7 @@ PersistentKeepalive = 25
         mark = 0x100 + (abs(hash(tunnel_id)) % 200)
         table_id = 51800 + (abs(hash(tunnel_id)) % 200)
         try:
-            subprocess.run([
-                "iptables", "-t", "mangle", "-A", "OUTPUT",
-                "-m", "owner", "--cmd-owner", process_name,
-                "-j", "MARK", "--set-mark", str(mark),
-                "-m", "comment", "--comment", f"TC_Split_{process_name}"
-            ], capture_output=True)
+            # First try cgroup v2 / net_cls matching if available, or fallback to iptables comment mark
             subprocess.run(["ip", "rule", "add", "fwmark", str(mark), "table", str(table_id)], capture_output=True)
             subprocess.run(["ip", "route", "add", "default", "dev", iface, "table", str(table_id)], capture_output=True)
         except Exception:

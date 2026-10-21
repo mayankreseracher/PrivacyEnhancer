@@ -90,6 +90,15 @@ def cleanup():
     try:
         from backend.server import engine
 
+        # Safely await engine.stop() if event loop is running
+        if hasattr(engine, "loop") and engine.loop and engine.loop.is_running():
+            try:
+                import asyncio
+                fut = asyncio.run_coroutine_threadsafe(engine.stop(), engine.loop)
+                fut.result(timeout=3)
+            except Exception:
+                pass
+
         # Flush TC firewall rules
         if hasattr(engine, "firewall") and hasattr(engine.firewall, "flush_all_tc_rules"):
             try:
