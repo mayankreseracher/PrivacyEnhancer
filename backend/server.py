@@ -19,7 +19,7 @@ from .platform_helper import PlatformHelper
 
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
-app = FastAPI(title="TrackerControl PC", version="1.0.8")
+app = FastAPI(title="TrackerControl PC", version="1.0.9")
 
 # Enable CORS restricted to localhost & local dashboard for CSRF & RCE security
 app.add_middleware(
@@ -546,15 +546,22 @@ async def set_split_tunneling(payload: SplitTunnelConfigRequest):
     if payload.mode == "tunnel":
         engine.wireguard.bind_app_to_tunnel(payload.process_name, payload.tunnel_id)
         engine.database.set_app_mode(payload.process_name, "block_trackers")
+        engine.firewall.unblock_executable(payload.process_name)
     elif payload.mode == "orbot":
         engine.wireguard.bind_app_to_tunnel(payload.process_name, "orbot")
         engine.database.set_app_mode(payload.process_name, "block_trackers")
+        engine.firewall.unblock_executable(payload.process_name)
     elif payload.mode == "bypass":
         engine.wireguard.bind_app_to_tunnel(payload.process_name, "direct")
         engine.database.set_app_mode(payload.process_name, "allow_all")
+        engine.firewall.unblock_executable(payload.process_name)
     elif payload.mode == "block":
         engine.wireguard.bind_app_to_tunnel(payload.process_name, None)
         engine.database.set_app_mode(payload.process_name, "block_all")
+        for a in engine.database.get_all_apps():
+            if a.get("process_name", "").lower() == payload.process_name.lower():
+                if a.get("exe_path") and os.path.exists(a["exe_path"]):
+                    engine.firewall.block_executable(a["exe_path"], payload.process_name)
     return {"success": True, "app": payload.process_name, "mode": payload.mode}
 
 @app.get("/api/trackers")
@@ -591,7 +598,7 @@ async def export_csv():
 async def get_updater_status():
     if hasattr(engine, "updater") and engine.updater:
         return engine.updater.get_status()
-    return {"status": "disabled", "current_version": "1.0.8"}
+    return {"status": "disabled", "current_version": "1.0.9"}
 
 @app.post("/api/updater/check")
 async def check_for_updates():
@@ -626,6 +633,33 @@ async def update_updater_settings(payload: UpdaterSettingsRequest):
     return {"success": False, "error": "Updater not initialized"}
 
 # ==================== System & Background Service Endpoints ====================
+
+class AutostartRequest(BaseModel):
+    enabled: bool
+
+@app.get("/api/system/autostart")
+async def get_autostart_status():
+    from .autostart_service import AutostartService
+    return AutostartService.get_status()
+
+@app.post("/api/system/autostart")
+async def set_autostart_status(payload: AutostartRequest):
+    from .autostart_service import AutostartService
+    success = AutostartService.toggle(payload.enabled)
+    return {"success": success, "autostart_enabled": AutostartService.is_enabled()}
+
+class NotificationSettingRequest(BaseModel):
+    enabled: bool
+
+@app.get("/api/system/notifications")
+async def get_notification_setting():
+    enabled = engine.database.get_setting("desktop_notifications", "true").lower() in ("true", "1")
+    return {"notifications_enabled": enabled}
+
+@app.post("/api/system/notifications")
+async def set_notification_setting(payload: NotificationSettingRequest):
+    engine.database.set_setting("desktop_notifications", "true" if payload.enabled else "false")
+    return {"success": True, "notifications_enabled": payload.enabled}
 
 @app.get("/api/system/elevation")
 async def get_system_elevation():
@@ -681,7 +715,7 @@ async def request_system_elevation():
 async def get_system_service_status():
     return {
         "status": "online",
-        "version": "1.0.8",
+        "version": "1.0.9",
         "persistent_background_mode": True,
         "shield_active": engine.shield_active,
         "protection_mode": engine.protection_mode,

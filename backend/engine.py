@@ -39,6 +39,8 @@ class TrackerEngine:
         
         self.loop = None
         self.kill_switch_active = False
+        self.tray = None
+        self._last_desktop_notify = 0.0
         
         # State
         self.protection_mode = "MAX_PRIVACY" # MAX_PRIVACY, BALANCED, AUDIT_ONLY, LOCKDOWN
@@ -164,11 +166,29 @@ class TrackerEngine:
 
         self._dispatch_coro(self.broadcast_message({"type": "NEW_CONNECTION", "data": event}))
 
+    def set_tray(self, tray):
+        """Attaches the system tray sentry for background desktop alerts."""
+        self.tray = tray
+        if tray and hasattr(tray, "engine") and tray.engine is None:
+            tray.engine = self
+
     def _add_alert(self, alert: Dict[str, Any]):
         self.alerts.insert(0, alert)
         if len(self.alerts) > self.max_alerts:
             self.alerts.pop()
         self._dispatch_coro(self.broadcast_message({"type": "SECURITY_ALERT", "data": alert}))
+
+        # Background Threat Notification Sentry
+        if hasattr(self, "tray") and self.tray:
+            try:
+                notify_enabled = self.database.get_setting("desktop_notifications", "true").lower() in ("true", "1")
+                if notify_enabled and (alert.get("type") in ("TRACKER_BLOCKED", "NEW_APP", "UPDATE_AVAILABLE") or alert.get("severity") in ("warning", "error", "critical")):
+                    now_t = alert.get("timestamp", time.time())
+                    if now_t - getattr(self, "_last_desktop_notify", 0.0) >= 4.0:
+                        self._last_desktop_notify = now_t
+                        self.tray.notify(alert.get("title", "TrackerControl Alert"), alert.get("message", ""))
+            except Exception:
+                pass
 
     def on_updater_event(self, event: Dict[str, Any]):
         """Dispatches updater events (e.g. UPDATE_AVAILABLE, UPDATE_PROGRESS, UPDATE_READY, UPDATE_STATUS)."""

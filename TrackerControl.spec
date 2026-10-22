@@ -165,8 +165,8 @@ if IS_MAC:
         info_plist={
             'CFBundleName': 'TrackerControl',
             'CFBundleDisplayName': 'TrackerControl PC',
-            'CFBundleVersion': '1.0.8',
-            'CFBundleShortVersionString': '1.0.8',
+            'CFBundleVersion': '1.0.9',
+            'CFBundleShortVersionString': '1.0.9',
             'NSHighResolutionCapable': True,
             'NSLocalNetworkUsageDescription': 'TrackerControl PC requires access to local network sockets to monitor processes, filter network trackers, and run the privacy proxy.',
         }

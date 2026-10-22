@@ -24,9 +24,9 @@
         <span id="hostOsBadge" style="background: rgba(0, 229, 255, 0.12); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--accent-glow); font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; font-weight: 600;">🖥️ OS: Detecting...</span>
         <button class="update-pill-btn" id="updatePillBtn" onclick="openUpdateModal()" title="System Updates & Version" aria-label="System Updates">
           <span class="update-pill-dot" id="updatePillDot"></span>
-          <span id="updatePillText">v1.0.8</span>
+          <span id="updatePillText">v1.0.9</span>
         </button>
-        <span title="Continuous Background Service: Closing window keeps DNS & Multi-VPN tunnels running" style="background: rgba(0, 255, 157, 0.12); border: 1px solid rgba(0, 255, 157, 0.3); color: #00ff9d; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: default;">🟢 Svc Active</span>
+        <span id="bgSvcBadge" title="Continuous Background Service: Closing window keeps DNS & Multi-VPN tunnels running (Click to configure)" style="background: rgba(0, 255, 157, 0.12); border: 1px solid rgba(0, 255, 157, 0.3); color: #00ff9d; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openBackgroundServiceModal()">🟢 Svc Active ⚙️</span>
         <span class="live-pulse" id="enginePulse"></span>
         <span style="font-size: 0.8rem; font-weight: 700; color: #00ff9d;" id="engineStatus">RADAR ONLINE</span>
       </div>
@@ -903,7 +903,7 @@
             <div class="update-version-split">
               <div class="version-box">
                 <span class="version-label">Current Version</span>
-                <span class="version-value" id="updateCurrentVersion">v1.0.8</span>
+                <span class="version-value" id="updateCurrentVersion">v1.0.9</span>
               </div>
               <div class="version-arrow">➔</div>
               <div class="version-box">
@@ -980,5 +980,92 @@
 
   <div id="toastContainer" class="toast-container"></div>
   <script src="/static/app.js"></script>
+
+    <!-- Continuous Background Service Modal -->
+    <div class="modal-backdrop" id="bgServiceModal" role="dialog" aria-modal="true" aria-labelledby="bgServiceModalTitle">
+      <div class="modal-dialog update-modal-dialog">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 1.5rem;">🛡️</span>
+            <div>
+              <h3 id="bgServiceModalTitle" style="font-size: 1.15rem; font-weight: 700; color: #fff;">Sovereign Background Service & Threat Guard</h3>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Persistent 24/7 background packet filtering, DNS sinkhole & Multi-VPN tunnels</div>
+            </div>
+          </div>
+          <button class="modal-close-btn" onclick="closeBackgroundServiceModal()" aria-label="Close modal">&times;</button>
+        </div>
+
+        <div class="modal-body" style="padding: 20px;">
+          <!-- Status Banner -->
+          <div class="glass-panel" style="padding: 14px 18px; margin-bottom: 18px; display: flex; align-items: center; gap: 12px; background: rgba(0, 255, 157, 0.08); border-color: rgba(0, 255, 157, 0.3);">
+            <span style="font-size: 1.4rem;">🟢</span>
+            <div>
+              <div style="font-size: 0.88rem; font-weight: 700; color: #00ff9d;">Continuous Background Guard Active</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Closing the dashboard window keeps all privacy filters, DNS sinkhole, and multi-VPN tunnels running silently in the system tray.</div>
+            </div>
+          </div>
+
+          <!-- Feature Controls List -->
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <!-- Autostart Toggle -->
+            <div class="glass-panel" style="padding: 14px 18px; display: flex; align-items: center; justify-content: space-between;">
+              <div style="padding-right: 16px;">
+                <div style="font-weight: 600; color: #fff; font-size: 0.88rem;">🚀 Launch on System Startup</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Start TrackerControl silently in the background on boot to protect network sockets 24/7 like Proton VPN / GlassWire.</div>
+              </div>
+              <label class="switch" style="flex-shrink: 0;">
+                <input type="checkbox" id="autostartToggle" onchange="toggleAutostart(this.checked)">
+                <span class="slider round"></span>
+              </label>
+            </div>
+
+            <!-- Desktop Threat Alerts Toggle -->
+            <div class="glass-panel" style="padding: 14px 18px; display: flex; align-items: center; justify-content: space-between;">
+              <div style="padding-right: 16px;">
+                <div style="font-weight: 600; color: #fff; font-size: 0.88rem;">🔔 Desktop Threat Alerts</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Receive native desktop notifications when malicious trackers are blocked or when new apps access the network in the background.</div>
+              </div>
+              <label class="switch" style="flex-shrink: 0;">
+                <input type="checkbox" id="desktopNotificationsToggle" checked onchange="toggleDesktopNotifications(this.checked)">
+                <span class="slider round"></span>
+              </label>
+            </div>
+
+            <!-- Close to Tray Notification -->
+            <div class="glass-panel" style="padding: 14px 18px; display: flex; align-items: center; justify-content: space-between;">
+              <div>
+                <div style="font-weight: 600; color: #fff; font-size: 0.88rem;">📌 Close-to-Tray Protection</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Clicking 'X' hides the dashboard to the system tray rather than killing protection. Use Tray Menu to exit completely.</div>
+              </div>
+              <span class="badge badge-allowed" style="font-size: 0.72rem; padding: 3px 8px; flex-shrink: 0;">Active</span>
+            </div>
+          </div>
+
+          <!-- Active Background Subsystems Grid -->
+          <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-color);">
+            <div style="font-size: 0.78rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 10px; letter-spacing: 0.5px;">Active Subsystems in Background</div>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+              <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; font-size: 0.78rem; color: #cbd5e1; display: flex; align-items: center; gap: 8px;">
+                <span>⚡</span> <span>Real-Time Socket Scanner</span>
+              </div>
+              <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; font-size: 0.78rem; color: #cbd5e1; display: flex; align-items: center; gap: 8px;">
+                <span>🛡️</span> <span>Local DNS Sinkhole</span>
+              </div>
+              <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; font-size: 0.78rem; color: #cbd5e1; display: flex; align-items: center; gap: 8px;">
+                <span>🔒</span> <span>Multi-VPN SOCKS5 Relays</span>
+              </div>
+              <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; font-size: 0.78rem; color: #cbd5e1; display: flex; align-items: center; gap: 8px;">
+                <span>🧅</span> <span>Orbot / Tor Daemon Guard</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="modal-footer" style="padding: 14px 20px; display: flex; justify-content: flex-end;">
+          <button class="btn-action" onclick="closeBackgroundServiceModal()">Done</button>
+        </div>
+      </div>
+    </div>
 </body>
 </html>

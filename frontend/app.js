@@ -1374,6 +1374,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadOsInfoAndPrivacy();
   loadVpnState();
   loadElevationStatus();
+  loadAutostartStatus();
 
   // Tab Switching
   document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -3112,5 +3113,71 @@ window.requestAdminElevation = async function() {
     }
   } catch (err) {
     showToast("Elevation Error", "Could not request elevation: " + err, "error");
+  }
+};
+
+// ==================== Background Service & Autostart Controller ====================
+window.openBackgroundServiceModal = function() {
+  const modal = document.getElementById("bgServiceModal");
+  if (modal) {
+    modal.classList.add("active");
+    loadAutostartStatus();
+  }
+};
+
+window.closeBackgroundServiceModal = function() {
+  const modal = document.getElementById("bgServiceModal");
+  if (modal) modal.classList.remove("active");
+};
+
+async function loadAutostartStatus() {
+  try {
+    const [autoRes, notifRes] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/system/autostart`).then(r => r.json()),
+      fetch(`${API_BASE}/api/system/notifications`).then(r => r.json())
+    ]);
+
+    if (autoRes.status === "fulfilled" && autoRes.value) {
+      const toggle = document.getElementById("autostartToggle");
+      if (toggle) toggle.checked = !!autoRes.value.autostart_enabled;
+    }
+    if (notifRes.status === "fulfilled" && notifRes.value) {
+      const notifToggle = document.getElementById("desktopNotificationsToggle");
+      if (notifToggle) notifToggle.checked = !!notifRes.value.notifications_enabled;
+    }
+  } catch (e) {
+    console.warn("Could not load autostart status:", e);
+  }
+}
+
+window.toggleAutostart = async function(enabled) {
+  try {
+    const res = await fetch(`${API_BASE}/api/system/autostart`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("System Startup", enabled ? "TrackerControl will launch automatically on system boot." : "Startup launch disabled.", enabled ? "shield" : "warn");
+    } else {
+      showToast("System Startup", "Could not configure autostart.", "warn");
+    }
+  } catch (e) {
+    showToast("Autostart Error", e.message || "Failed to update startup configuration", "error");
+  }
+};
+
+window.toggleDesktopNotifications = async function(enabled) {
+  try {
+    const res = await fetch(`${API_BASE}/api/system/notifications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled })
+    });
+    const data = await res.json();
+    showToast("Notifications", enabled ? "Desktop threat alerts enabled." : "Desktop threat alerts paused.", "info");
+  } catch (e) {
+    showToast("Notifications Error", e.message || "Failed to update notification settings", "error");
   }
 };

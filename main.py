@@ -211,7 +211,8 @@ def run_service_mode():
     from backend.tray_service import TrayService
 
     print("[+] Starting TrackerControl PC in Sovereign Background Service mode...")
-    tray = TrayService(engine=engine, on_quit=cleanup)
+    tray = TrayService(engine=engine, on_open_dashboard=lambda: webbrowser.open("http://127.0.0.1:8000"), on_quit=cleanup)
+    engine.set_tray(tray)
     tray.start()
 
     bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
@@ -238,6 +239,7 @@ def run_browser_mode(server_started: bool = False, existing_tray=None):
     else:
         tray = TrayService(engine=engine, on_open_dashboard=lambda: webbrowser.open(url), on_quit=cleanup)
         tray.start()
+    engine.set_tray(tray)
 
     try:
         webbrowser.open(url)
@@ -294,12 +296,36 @@ def run_native_window():
         except Exception:
             time.sleep(0.1)
 
+    force_quit = False
+    window = None
+
+    def open_dashboard():
+        if window:
+            try:
+                window.show()
+                window.restore()
+                return
+            except Exception:
+                pass
+        webbrowser.open("http://127.0.0.1:8000")
+
+    def quit_app():
+        nonlocal force_quit
+        force_quit = True
+        if window:
+            try:
+                window.destroy()
+            except Exception:
+                pass
+        cleanup()
+
     # Initialize System Tray Sentry
     tray = TrayService(
         engine=engine,
-        on_open_dashboard=lambda: webbrowser.open("http://127.0.0.1:8000"),
-        on_quit=cleanup
+        on_open_dashboard=open_dashboard,
+        on_quit=quit_app
     )
+    engine.set_tray(tray)
     tray.start()
 
     try:
@@ -313,21 +339,28 @@ def run_native_window():
             confirm_close=False,
             text_select=True
         )
+
+        def on_closing():
+            nonlocal force_quit
+            if not force_quit:
+                try:
+                    window.hide()
+                    tray.notify("TrackerControl Background Guard", "Dashboard minimized to system tray. Privacy protection and multi-VPN tunnels remain active.")
+                except Exception:
+                    pass
+                return False  # Prevent window destroy, keep running in background!
+            return True
+
+        window.events.closing += on_closing
         webview.start(debug=False)
 
-        # When pywebview native window is closed, do NOT kill the background service!
+        # When pywebview native window is closed or hidden, keep background service active until explicit quit
         print("\n[+] Desktop window closed. TrackerControl PC continues running in background service mode.")
         print("[+] System DNS filtering, Firewall rules, and Multi-VPN split tunneling remain 100% active.")
         print("[+] Click the system tray icon or visit http://127.0.0.1:8000 to reopen the dashboard.")
-        tray.notify(
-            "TrackerControl PC Active",
-            "Running in background. DNS sinkhole & Multi-VPN tunnels remain active."
-        )
 
-        # Keep background service active until explicit quit
-        while not _cleaned_up:
+        while not _cleaned_up and not force_quit:
             time.sleep(1)
-
     except Exception as e:
         print(f"[!] pywebview encountered error ({e}). Falling back to browser mode.")
         run_browser_mode(server_started=True, existing_tray=tray)
@@ -342,7 +375,7 @@ def main():
     print_banner()
 
     # Check for service/daemon mode
-    is_service = any(arg in sys.argv for arg in ("--service", "--daemon", "--background"))
+    is_service = any(arg in sys.argv for arg in ("--service", "--daemon", "--background", "--minimized"))
     if is_service:
         run_service_mode()
         return

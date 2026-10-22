@@ -1,7 +1,7 @@
 """
 System Tray Sentry & Background Persistence Service for TrackerControl PC.
 Keeps TrackerControl running continuously in the background like a sovereign VPN provider,
-providing quick tray access, shield toggles, tunnel status, and graceful exit.
+providing quick tray access, shield toggles, tunnel status, startup settings, and graceful exit.
 """
 
 import sys
@@ -17,6 +17,8 @@ try:
     PYSTRAY_AVAILABLE = True
 except ImportError:
     PYSTRAY_AVAILABLE = False
+
+from .autostart_service import AutostartService
 
 
 def create_tray_shield_icon(active: bool = True):
@@ -86,6 +88,17 @@ class TrayService:
                 pystray.MenuItem("⚡ Toggle Privacy Shield", self._action_toggle_shield),
                 pystray.MenuItem("🔒 Multi-VPN Split Tunneling", self._action_open_vpn),
                 pystray.Menu.SEPARATOR,
+                pystray.MenuItem(
+                    "🚀 Launch on System Boot",
+                    self._action_toggle_autostart,
+                    checked=lambda item: AutostartService.is_enabled()
+                ),
+                pystray.MenuItem(
+                    "🔔 Desktop Threat Alerts",
+                    self._action_toggle_notifications,
+                    checked=lambda item: self._is_notifications_enabled()
+                ),
+                pystray.Menu.SEPARATOR,
                 pystray.MenuItem("🛑 Quit & Shutdown Engine", self._action_quit)
             )
 
@@ -106,6 +119,25 @@ class TrayService:
                 self.icon.notify(message, title)
             except Exception:
                 pass
+
+    def _is_notifications_enabled(self) -> bool:
+        if self.engine and hasattr(self.engine, "database"):
+            return self.engine.database.get_setting("desktop_notifications", "true").lower() in ("true", "1")
+        return True
+
+    def _action_toggle_autostart(self, icon=None, item=None):
+        current = AutostartService.is_enabled()
+        new_state = not current
+        AutostartService.toggle(new_state)
+        msg = "TrackerControl will launch automatically on system boot." if new_state else "Startup launch disabled."
+        self.notify("System Autostart", msg)
+
+    def _action_toggle_notifications(self, icon=None, item=None):
+        if self.engine and hasattr(self.engine, "database"):
+            current = self.engine.database.get_setting("desktop_notifications", "true").lower() in ("true", "1")
+            new_val = "false" if current else "true"
+            self.engine.database.set_setting("desktop_notifications", new_val)
+            self.notify("Threat Notifications", f"Desktop threat notifications {'enabled' if new_val == 'true' else 'disabled'}.")
 
     def _action_open_dashboard(self, icon=None, item=None):
         if self.on_open_dashboard:
