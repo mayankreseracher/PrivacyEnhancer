@@ -29,6 +29,58 @@ from backend.platform_helper import PlatformHelper
 _cleaned_up = False
 
 
+_instance_mutex = None
+_lock_file = None
+
+def acquire_single_instance_lock() -> bool:
+    """
+    Enforces OS-level single instance application lifecycle.
+    On Windows: Uses named Win32 Mutex.
+    On Linux/macOS: Uses non-blocking file lock.
+    Returns True if this is the primary instance, False if already running.
+    """
+    global _instance_mutex, _lock_file
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ERROR_ALREADY_EXISTS = 183
+            _instance_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, r"Global\TrackerControlPC_SingleInstance_Mutex_v1")
+            last_err = ctypes.windll.kernel32.GetLastError()
+            if last_err == ERROR_ALREADY_EXISTS:
+                return False
+            return True
+        except Exception:
+            return True
+    else:
+        try:
+            import fcntl
+            lock_dir = PlatformHelper.get_data_dir()
+            lock_path = os.path.join(lock_dir, "trackercontrol.lock")
+            _lock_file = open(lock_path, "w")
+            fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except Exception:
+            return False
+
+def wake_existing_instance():
+    """Notifies already-running TrackerControl instance to bring native window to front."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "http://127.0.0.1:8000/api/system/show",
+            data=b"{}",
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=1.5):
+            pass
+    except Exception:
+        try:
+            import webbrowser
+            webbrowser.open("http://127.0.0.1:8000")
+        except Exception:
+            pass
+
+
 def check_elevation(auto_elevate: bool = True) -> bool:
     """
     Checks if TrackerControl PC is running with administrative or root privileges.
@@ -57,36 +109,22 @@ def check_elevation(auto_elevate: bool = True) -> bool:
         print("=" * 72 + "\n")
         return False
 
-    # Auto-elevate on Windows
+    # Auto-elevate on Windows using strict argument whitelist and canonical path validation
     if sys.platform == "win32":
-        try:
-            import ctypes
-            print("\n" + "=" * 72)
-            print(" [*] TrackerControl PC requires Administrator privileges for:")
-            print("     - Full application firewall blocking (netsh advfirewall)")
-            print("     - System DNS sinkhole on port 53")
-            print("     - Multi-VPN split-tunneling & P2P port forwarding")
-            print("     - OS telemetry neutralizer")
-            print(" [*] Requesting Windows UAC elevation...")
-            print("=" * 72 + "\n")
+        print("\n" + "=" * 72)
+        print(" [*] TrackerControl PC requires Administrator privileges for:")
+        print("     - Full application firewall blocking (netsh advfirewall)")
+        print("     - System DNS sinkhole on port 53")
+        print("     - Multi-VPN split-tunneling & P2P port forwarding")
+        print("     - OS telemetry neutralizer")
+        print(" [*] Requesting Windows UAC elevation...")
+        print("=" * 72 + "\n")
 
-            args = " ".join([f'"{a}"' for a in sys.argv[1:]])
-            if getattr(sys, "frozen", False):
-                hinstance = ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", sys.executable, args, None, 1
-                )
-            else:
-                hinstance = ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", sys.executable, f'"{sys.argv[0]}" {args}'.strip(), None, 1
-                )
-
-            if int(hinstance) > 32:
-                # Successfully launched elevated process!
-                sys.exit(0)
-            else:
-                print(f"[!] UAC prompt declined (code {hinstance}). Continuing in Audit Mode.\n")
-        except Exception as e:
-            print(f"[!] Error during UAC elevation request: {e}\n")
+        success, code, msg = PlatformHelper.request_windows_uac_elevation(sys.argv)
+        if success:
+            sys.exit(0)
+        else:
+            print(f"[!] UAC prompt declined ({msg}). Continuing in Audit Mode.\n")
 
     return False
 
@@ -406,7 +444,15 @@ def main():
             _cleaned_up = True
             sys.exit(1)
 
-    # 1. Admin Elevation Check at the very start of main()
+    # 1. Single-Instance Check (Pure Desktop Application Architecture)
+    if not any(arg in sys.argv for arg in ("--allow-multiple", "--headless", "--restore-dns", "--repair-dns", "--reset-dns")):
+        if not acquire_single_instance_lock():
+            print("[*] TrackerControl PC is already running in background.")
+            print("[*] Restoring and focusing existing desktop window...")
+            wake_existing_instance()
+            sys.exit(0)
+
+    # 2. Admin Elevation Check at the very start of main()
     check_elevation()
 
     # Print startup banner

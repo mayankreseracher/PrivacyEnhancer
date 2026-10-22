@@ -2875,6 +2875,20 @@ function renderUpdaterUI(data) {
     }
   }
 
+  // 5b. Cryptographic Integrity Verification Card
+  const verifyCard = document.getElementById("updateVerificationCard");
+  const shaText = document.getElementById("updateSha256Text");
+  if (verifyCard) {
+    if ((status === "ready" || status === "downloaded") && (data.verified_sha256 || data.sha256_verified)) {
+      verifyCard.style.display = "block";
+      if (shaText && data.verified_sha256) {
+        shaText.textContent = `SHA-256: ${data.verified_sha256}`;
+      }
+    } else {
+      verifyCard.style.display = "none";
+    }
+  }
+
   // 6. Action Buttons & Controls
   const checkBtn = document.getElementById("updateCheckBtn");
   const checkIcon = document.getElementById("updateCheckIcon");
@@ -2970,6 +2984,8 @@ async function downloadUpdate() {
 }
 
 async function applyUpdate() {
+  const confirmed = confirm("Install Verified Update:\n\nTrackerControl PC has verified this release artifact against official cryptographic checksums (SHA-256).\n\nDo you want to apply the update and restart the application now?");
+  if (!confirmed) return;
   try {
     showToast("Applying Update", "Executing updater script and restarting TrackerControl PC...", "success");
     state.updater.status = "applying";

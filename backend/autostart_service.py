@@ -18,10 +18,10 @@ APP_NAME = "TrackerControlPC"
 
 class AutostartService:
     @staticmethod
-    def get_launch_command() -> str:
-        """Constructs the appropriate background launch command for the current platform."""
+    def get_launch_argv() -> list:
+        """Returns canonical, validated argv tokens for background startup."""
         if getattr(sys, "frozen", False):
-            return f'"{sys.executable}" --background'
+            return [os.path.abspath(sys.executable), "--background"]
         else:
             python_exe = sys.executable
             if IS_WINDOWS:
@@ -29,7 +29,13 @@ class AutostartService:
                 if os.path.exists(pythonw):
                     python_exe = pythonw
             main_py = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "main.py"))
-            return f'"{python_exe}" "{main_py}" --background'
+            return [os.path.abspath(python_exe), main_py, "--background"]
+
+    @classmethod
+    def get_launch_command(cls) -> str:
+        """Constructs safely quoted command string from the validated argv list."""
+        argv = cls.get_launch_argv()
+        return " ".join(f'"{a}"' if " " in a else a for a in argv)
 
     @staticmethod
     def is_enabled() -> bool:
@@ -78,12 +84,19 @@ class AutostartService:
                 autostart_dir = os.path.expanduser("~/.config/autostart")
                 os.makedirs(autostart_dir, exist_ok=True)
                 desktop_file = os.path.join(autostart_dir, f"{APP_NAME.lower()}.desktop")
+
+                # Format Exec line according to FreeDesktop Desktop Entry Specification
+                def escape_xdg_arg(val: str) -> str:
+                    escaped = val.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$")
+                    return f'"{escaped}"' if (" " in escaped or "\t" in escaped) else escaped
+
+                exec_line = " ".join(escape_xdg_arg(a) for a in cls.get_launch_argv())
                 content = f"""[Desktop Entry]
 Type=Application
 Version=1.0
 Name=TrackerControl PC
 Comment=Sovereign Desktop Privacy Guard & Threat Neutralizer
-Exec={cmd}
+Exec={exec_line}
 Icon=trackercontrol
 Terminal=false
 StartupNotify=false
@@ -104,10 +117,10 @@ X-GNOME-Autostart-enabled=true
                 os.makedirs(agents_dir, exist_ok=True)
                 plist_file = os.path.join(agents_dir, "org.trackercontrol.pc.plist")
                 
-                # Split cmd into parts for plist array
-                import shlex
-                tokens = shlex.split(cmd)
-                prog_args = "\n".join(f"        <string>{token}</string>" for token in tokens)
+                def xml_escape(val: str) -> str:
+                    return val.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+                prog_args = "\n".join(f"        <string>{xml_escape(a)}</string>" for a in cls.get_launch_argv())
 
                 content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

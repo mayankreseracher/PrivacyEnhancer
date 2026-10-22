@@ -16,7 +16,84 @@ IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
 IS_MACOS = sys.platform == "darwin"
 
+ALLOWED_ELEVATION_FLAGS = {
+    "--service",
+    "--daemon",
+    "--background",
+    "--minimized",
+    "--headless",
+    "--browser",
+    "--lan",
+    "--public",
+    "--restore-dns",
+    "--repair-dns",
+    "--reset-dns"
+}
+
+
 class PlatformHelper:
+    @staticmethod
+    def sanitize_elevation_args(raw_argv: List[str]) -> List[str]:
+        """
+        Filters command-line arguments against a strict security whitelist.
+        Rejects shell metacharacters, unrecognized flags, or path tampering.
+        """
+        sanitized = []
+        if not raw_argv or len(raw_argv) <= 1:
+            return sanitized
+        for arg in raw_argv[1:]:
+            clean = arg.strip()
+            # Reject dangerous shell injection tokens
+            if any(char in clean for char in ["&", "|", ";", "$", "`", "<", ">", "\n", "\r"]):
+                continue
+            if clean in ALLOWED_ELEVATION_FLAGS:
+                sanitized.append(clean)
+            elif clean.startswith("--port=") and clean[7:].isdigit():
+                port_num = int(clean[7:])
+                if 1024 <= port_num <= 65535:
+                    sanitized.append(clean)
+        return sanitized
+
+    @staticmethod
+    def request_windows_uac_elevation(raw_argv: List[str]) -> Tuple[bool, int, str]:
+        """
+        Relaunches TrackerControl PC with Windows UAC elevation using strictly
+        validated canonical binary path and whitelisted arguments.
+        Returns: (success: bool, hinstance: int, message: str)
+        """
+        if not IS_WINDOWS:
+            return False, 0, "UAC elevation is only supported on Windows."
+
+        import ctypes
+        target_exe = os.path.abspath(sys.executable)
+        if not os.path.isfile(target_exe):
+            return False, 0, "Invalid executable path for elevation."
+
+        sanitized_args = PlatformHelper.sanitize_elevation_args(raw_argv)
+        params_str = " ".join(f'"{a}"' for a in sanitized_args)
+
+        try:
+            if getattr(sys, "frozen", False):
+                hinstance = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", target_exe, params_str, None, 1
+                )
+            else:
+                # Running from source in development mode
+                script_path = os.path.abspath(raw_argv[0])
+                if not os.path.isfile(script_path) or not script_path.endswith(".py"):
+                    return False, 0, f"Invalid script path for elevation: {script_path}"
+                full_params = f'"{script_path}" {params_str}'.strip()
+                hinstance = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", target_exe, full_params, None, 1
+                )
+
+            code = int(hinstance)
+            if code > 32:
+                return True, code, "UAC elevation initiated successfully."
+            else:
+                return False, code, f"UAC elevation cancelled or declined by user (code {code})."
+        except Exception as e:
+            return False, 0, f"Elevation error: {e}"
     @staticmethod
     def get_os_type() -> str:
         if IS_WINDOWS:

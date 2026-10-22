@@ -1,7 +1,8 @@
 """
 Cross-Platform Auto-Updater Engine for TrackerControl PC.
 Checks GitHub Releases API for new releases, matches appropriate platform assets,
-streams downloads with real-time progress, and automates safe binary replacement and restart.
+enforces strict cryptographic SHA-256 integrity verification against official SHA256SUMS,
+quarantines staging, and automates safe binary replacement and restart.
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import time
 import shutil
 import re
 import zipfile
+import hashlib
 import urllib.request
 import urllib.error
 import subprocess
@@ -28,22 +30,22 @@ ALL_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 def parse_version(v_str: str) -> Tuple[int, ...]:
     """
     Parses version strings like 'v1.0.4', '1.0.5', 'v1.0.4-patch1'
-    into comparable tuples of integers.
+    into comparable integer tuples: (1, 0, 4)
     """
     if not v_str:
         return (0, 0, 0)
-    cleaned = v_str.strip().lstrip("vV")
-    # Take first part before any '-' or '+' (e.g., 1.0.4 from 1.0.4-beta)
-    base_part = cleaned.split("-")[0].split("+")[0]
+    clean = v_str.strip().lstrip("vV")
+    clean = re.split(r"[-_+~]", clean)[0]
+    parts = clean.split(".")
     nums = []
-    for part in base_part.split("."):
+    for p in parts:
         try:
-            nums.append(int(part))
+            nums.append(int(p))
         except ValueError:
             nums.append(0)
     while len(nums) < 3:
         nums.append(0)
-    return tuple(nums)
+    return tuple(nums[:4])
 
 
 def is_newer_version(remote: str, current: str) -> bool:
@@ -58,13 +60,15 @@ class AutoUpdater:
         self.current_version = CURRENT_VERSION
         
         # State
-        self.status = "idle"  # idle, checking, update_available, up_to_date, downloading, downloaded, applying, error
+        self.status = "idle"  # idle, checking, update_available, up_to_date, downloading, ready, applying, error
         self.latest_version: Optional[str] = None
         self.release_name: Optional[str] = None
         self.release_notes: Optional[str] = None
         self.published_at: Optional[str] = None
         self.html_url: Optional[str] = None
         self.selected_asset: Optional[Dict[str, Any]] = None
+        self.sha256sums_url: Optional[str] = None
+        self.verified_sha256: Optional[str] = None
         
         # Download telemetry
         self.download_progress: float = 0.0  # 0.0 to 100.0%
@@ -78,9 +82,13 @@ class AutoUpdater:
         self.is_checking: bool = False
         self.is_downloading: bool = False
         
-        # Updates Staging Directory
+        # Updates Staging Directories (Quarantine & Verified)
         self.updates_dir = os.path.join(PlatformHelper.get_data_dir(), "updates")
+        self.quarantine_dir = os.path.join(self.updates_dir, "quarantine")
+        self.verified_dir = os.path.join(self.updates_dir, "verified")
         os.makedirs(self.updates_dir, exist_ok=True)
+        os.makedirs(self.quarantine_dir, exist_ok=True)
+        os.makedirs(self.verified_dir, exist_ok=True)
         
         # Background checking task handle
         self._periodic_task: Optional[asyncio.Task] = None
@@ -110,28 +118,66 @@ class AutoUpdater:
         if self.database:
             self.database.set_setting("updater_interval_hours", str(max(1, hours)))
 
-    # ==================== Release Matching ====================
+    # ==================== Strict Release Asset Validation ====================
+
+    def _is_safe_asset_name(self, filename: str) -> bool:
+        """
+        Enforces a strict security whitelist on release artifact filenames and extensions.
+        Rejects arbitrary executables, shell scripts, batch files, and mismatched platforms.
+        """
+        if not filename or not isinstance(filename, str):
+            return False
+        fname = filename.strip().lower()
+
+        # Reject any suspicious, script, or non-package extensions
+        disallowed = (".bat", ".cmd", ".vbs", ".ps1", ".sh", ".bash", ".py", ".dll", ".so", ".dylib", ".msi", ".jar")
+        if any(fname.endswith(bad) for bad in disallowed):
+            return False
+
+        if IS_WINDOWS:
+            # Standalone TrackerControl-PC.exe or TrackerControl-PC-*.zip
+            if fname == "trackercontrol-pc.exe":
+                return True
+            if (fname.startswith("trackercontrol-pc") or fname.startswith("trackercontrol")) and fname.endswith(".zip") and ("win" in fname or "windows" in fname):
+                return True
+            return False
+
+        elif IS_LINUX:
+            # Debian, RPM, or tarball packages matching official naming convention
+            if fname.startswith("trackercontrol") and (fname.endswith((".deb", ".rpm", ".tar.gz")) or fname == "trackercontrol-linux"):
+                return True
+            return False
+
+        elif IS_MACOS:
+            # macOS disk image or universal zip/tarball
+            if fname.startswith("trackercontrol") and (fname.endswith((".dmg", ".zip", ".tar.gz"))):
+                return True
+            return False
+
+        return False
 
     def _match_asset_for_platform(self, assets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Picks the best binary/package asset from GitHub release assets
-        matching the current operating system and architecture.
+        matching the current operating system and architecture with strict whitelist checking.
         """
         if not assets:
             return None
 
+        # Filter strictly safe assets
+        safe_assets = [a for a in assets if self._is_safe_asset_name(a.get("name", ""))]
+
         # 1. Windows:
         if IS_WINDOWS:
-            # First priority: standalone TrackerControl-PC.exe
-            for a in assets:
+            for a in safe_assets:
                 name = a.get("name", "").lower()
                 if name == "trackercontrol-pc.exe":
                     return a
-            for a in assets:
+            for a in safe_assets:
                 name = a.get("name", "").lower()
                 if name.endswith(".exe") and "trackercontrol" in name:
                     return a
-            for a in assets:
+            for a in safe_assets:
                 name = a.get("name", "").lower()
                 if ("windows" in name or "win" in name) and name.endswith(".zip"):
                     return a
@@ -139,12 +185,11 @@ class AutoUpdater:
 
         # 2. macOS:
         elif IS_MACOS:
-            # First priority: .dmg disk image
-            for a in assets:
+            for a in safe_assets:
                 name = a.get("name", "").lower()
                 if name.endswith(".dmg"):
                     return a
-            for a in assets:
+            for a in safe_assets:
                 name = a.get("name", "").lower()
                 if ("macos" in name or "darwin" in name) and (name.endswith(".tar.gz") or name.endswith(".zip")):
                     return a
@@ -157,20 +202,20 @@ class AutoUpdater:
 
             # Debian / Ubuntu family -> .deb
             if family == "debian":
-                for a in assets:
+                for a in safe_assets:
                     name = a.get("name", "").lower()
                     if name.endswith(".deb"):
                         return a
 
             # RHEL / Fedora / SUSE family -> .rpm
             if family in ("rhel", "suse"):
-                for a in assets:
+                for a in safe_assets:
                     name = a.get("name", "").lower()
                     if name.endswith(".rpm"):
                         return a
 
             # Standalone ELF binary or tarball
-            for a in assets:
+            for a in safe_assets:
                 name = a.get("name", "").lower()
                 if "linux" in name and not name.endswith((".deb", ".rpm")):
                     return a
@@ -205,6 +250,15 @@ class AutoUpdater:
             self.html_url = release_data.get("html_url")
 
             assets = release_data.get("assets", [])
+
+            # Locate official SHA256SUMS manifest in release assets
+            self.sha256sums_url = None
+            for a in assets:
+                aname = a.get("name", "").lower()
+                if aname in ("sha256sums", "sha256sums.txt", "checksums.txt"):
+                    self.sha256sums_url = a.get("browser_download_url")
+                    break
+
             matched_asset = self._match_asset_for_platform(assets)
             
             if matched_asset:
@@ -218,18 +272,18 @@ class AutoUpdater:
                 self.selected_asset = None
 
             if is_newer_version(latest_v, self.current_version):
-                self.status = "update_available"
-                # Dispatch WebSocket and UI alert
-                self._dispatch_event({
-                    "type": "UPDATE_AVAILABLE",
-                    "data": self.get_status()
-                })
+                if self.selected_asset:
+                    self.status = "update_available"
+                else:
+                    self.status = "update_available"  # New tag exists, but no binary for this specific OS
             else:
                 self.status = "up_to_date"
 
+            print(f"[AutoUpdater] Check complete: current={self.current_version}, latest={latest_v}, status={self.status}, sha256_manifest={bool(self.sha256sums_url)}")
+
         except Exception as e:
             self.status = "error"
-            self.error_message = str(e)
+            self.error_message = f"Failed to check for updates: {e}"
             print(f"[AutoUpdater] Check failed: {e}")
         finally:
             self.is_checking = False
@@ -243,7 +297,7 @@ class AutoUpdater:
     def _fetch_latest_release_sync(self) -> Dict[str, Any]:
         """
         Fetches latest release info from GitHub API with an automated rate-limit-free
-        HTML redirect & expanded_assets fallback to completely prevent HTTP 403 errors.
+        HTML redirect & expanded_assets fallback.
         """
         # Attempt 1: Standard GitHub REST API
         req = urllib.request.Request(
@@ -260,7 +314,7 @@ class AutoUpdater:
         except Exception as api_err:
             print(f"[AutoUpdater] Notice: GitHub API returned {api_err}. Engaging rate-limit-free Web Fallback...")
 
-        # Attempt 2: Resilient Web Fallback (Zero Rate-Limit Issues)
+        # Attempt 2: Resilient Web Fallback
         try:
             web_latest_url = f"https://github.com/{GITHUB_REPO}/releases/latest"
             req_web = urllib.request.Request(
@@ -306,11 +360,24 @@ class AutoUpdater:
             print(f"[AutoUpdater] Web fallback also failed: {web_err}")
             raise web_err
 
-    # ==================== Download Management ====================
+    # ==================== Download & Cryptographic Integrity ====================
+
+    @staticmethod
+    def _compute_file_sha256(filepath: str) -> str:
+        """Computes the SHA-256 hash of a file on disk using 64KB chunk streaming."""
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            while True:
+                chunk = f.read(64 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest().lower()
 
     async def start_download(self) -> Dict[str, Any]:
         """
-        Asynchronously downloads the matched update asset into the staging directory.
+        Asynchronously downloads the matched update asset into quarantine,
+        downloads SHA256SUMS, and performs strict cryptographic verification.
         """
         if self.is_downloading:
             return {"success": False, "error": "Download already in progress", "status": self.status}
@@ -318,39 +385,107 @@ class AutoUpdater:
         if not self.selected_asset or not self.selected_asset.get("download_url"):
             return {"success": False, "error": "No downloadable asset available for this platform."}
 
+        filename = self.selected_asset["name"] or "TrackerControl-PC-update"
+        if not self._is_safe_asset_name(filename):
+            return {"success": False, "error": f"Rejected asset '{filename}': does not match allowed security whitelist."}
+
         self.is_downloading = True
         self.status = "downloading"
         self.download_progress = 0.0
         self.downloaded_bytes = 0
         self.total_bytes = self.selected_asset.get("size", 0)
         self.error_message = None
+        self.verified_sha256 = None
 
         url = self.selected_asset["download_url"]
-        filename = self.selected_asset["name"] or "TrackerControl-PC-update"
-        dest_path = os.path.join(self.updates_dir, filename)
 
         loop = asyncio.get_event_loop()
-        self._download_task = loop.create_task(self._download_worker(url, dest_path))
-        return {"success": True, "message": "Download started", "asset": filename}
+        self._download_task = loop.create_task(self._download_worker(url, filename))
+        return {"success": True, "message": "Download and verification started", "asset": filename}
 
-    async def _download_worker(self, url: str, dest_path: str):
+    async def _download_worker(self, url: str, filename: str):
         loop = asyncio.get_event_loop()
+        quarantine_file = os.path.join(self.quarantine_dir, filename)
+        sums_file = os.path.join(self.quarantine_dir, "SHA256SUMS")
+
         try:
-            await loop.run_in_executor(None, self._download_file_sync, url, dest_path)
-            self.staged_file_path = dest_path
+            # Step 1: Download target update payload into quarantine
+            await loop.run_in_executor(None, self._download_file_sync, url, quarantine_file)
+
+            # Step 2: Download and verify SHA256SUMS manifest
+            if not self.sha256sums_url:
+                raise ValueError("Security Policy Error: Release does not provide an official SHA256SUMS manifest. Cannot verify update integrity.")
+
+            await loop.run_in_executor(None, self._download_file_sync, self.sha256sums_url, sums_file)
+
+            # Step 3: Parse SHA256SUMS for expected hash
+            expected_hash = None
+            with open(sums_file, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        h_val, f_val = parts[0], parts[1]
+                        if os.path.basename(f_val).lower() == filename.lower():
+                            expected_hash = h_val.lower().strip()
+                            break
+
+            if not expected_hash or len(expected_hash) != 64:
+                raise ValueError(f"Integrity Error: Release asset '{filename}' is not cataloged in official SHA256SUMS manifest!")
+
+            # Step 4: Compute SHA-256 of quarantined payload
+            computed_hash = await loop.run_in_executor(None, self._compute_file_sha256, quarantine_file)
+
+            if computed_hash != expected_hash:
+                raise ValueError(
+                    f"CRITICAL SECURITY ALERT: Cryptographic hash mismatch for '{filename}'! "
+                    f"Expected: {expected_hash}, Computed: {computed_hash}. Staged artifact was purged."
+                )
+
+            # Step 5: Move verified payload to verified directory
+            verified_file = os.path.join(self.verified_dir, filename)
+            if os.path.exists(verified_file):
+                try:
+                    os.remove(verified_file)
+                except Exception:
+                    pass
+            shutil.move(quarantine_file, verified_file)
+
+            # Enforce user-only permissions (0600 on POSIX)
+            if not IS_WINDOWS:
+                try:
+                    os.chmod(verified_file, 0o600)
+                except Exception:
+                    pass
+
+            self.staged_file_path = verified_file
+            self.verified_sha256 = computed_hash
             self.status = "ready"
             self.download_progress = 100.0
-            print(f"[AutoUpdater] Update successfully downloaded and verified ready: {dest_path}")
+            print(f"[AutoUpdater] Cryptographic integrity VERIFIED for {filename} (SHA-256: {computed_hash[:16]}...)")
             self._dispatch_event({
                 "type": "UPDATE_READY",
                 "data": self.get_status()
             })
+
         except asyncio.CancelledError:
             self.status = "idle"
+            if os.path.exists(quarantine_file):
+                try:
+                    os.remove(quarantine_file)
+                except Exception:
+                    pass
         except Exception as e:
             self.status = "error"
-            self.error_message = f"Download failed: {e}"
-            print(f"[AutoUpdater] Download error: {e}")
+            self.error_message = str(e)
+            print(f"[AutoUpdater] Download/verification error: {e}")
+            if os.path.exists(quarantine_file):
+                try:
+                    os.remove(quarantine_file)
+                except Exception:
+                    pass
         finally:
             self.is_downloading = False
             self._dispatch_event({
@@ -416,10 +551,25 @@ class AutoUpdater:
     async def apply_update(self) -> Dict[str, Any]:
         """
         Applies the downloaded update package and restarts TrackerControl PC.
-        Handles platform-specific self-replacement and permissions.
+        Validates cryptographic integrity and prevents TOCTOU tampering before execution.
         """
         if not self.staged_file_path or not os.path.exists(self.staged_file_path):
             return {"success": False, "error": "No downloaded update file found. Download first."}
+
+        if not self.verified_sha256:
+            return {"success": False, "error": "Integrity check failed: Update was not cryptographically verified against SHA256SUMS."}
+
+        # Anti-TOCTOU: Re-compute SHA-256 before actual execution
+        current_hash = self._compute_file_sha256(self.staged_file_path)
+        if current_hash != self.verified_sha256:
+            try:
+                os.remove(self.staged_file_path)
+            except Exception:
+                pass
+            self.staged_file_path = None
+            self.verified_sha256 = None
+            self.status = "error"
+            return {"success": False, "error": "CRITICAL SECURITY ALERT: Staged update file was modified on disk prior to application! Aborting."}
 
         self.status = "applying"
         current_pid = os.getpid()
@@ -434,7 +584,7 @@ class AutoUpdater:
                     zf.extractall(extracted_dir)
                     for root, _, files in os.walk(extracted_dir):
                         for f in files:
-                            if f.lower().endswith(".exe"):
+                            if f.lower() == "trackercontrol-pc.exe":
                                 payload_file = os.path.join(root, f)
                                 break
             except Exception as zip_err:
@@ -450,7 +600,7 @@ class AutoUpdater:
             if not os.path.exists(os.path.dirname(target_exe)):
                 os.makedirs(os.path.dirname(target_exe), exist_ok=True)
 
-        print(f"[AutoUpdater] Applying update: {payload_file} -> {target_exe}")
+        print(f"[AutoUpdater] Applying verified update: {payload_file} -> {target_exe}")
 
         # 1. Windows Self-Replacement via detached batch script
         if IS_WINDOWS:
@@ -510,7 +660,7 @@ exit
                 try:
                     os.chmod(self.staged_file_path, 0o755)
                     shutil.move(self.staged_file_path, target_exe)
-                    subprocess.Popen([target_exe] + sys.argv[1:])
+                    subprocess.Popen([target_exe])
                     asyncio.get_event_loop().call_later(0.5, lambda: os._exit(0))
                     return {"success": True, "message": "Updated standalone binary and restarting..."}
                 except Exception as e:
@@ -535,20 +685,19 @@ exit
     # ==================== Periodic Background Task ====================
 
     async def start_periodic_check(self, delay_initial_seconds: int = 5):
-        """Starts background loop that regularly checks for updates if enabled."""
+        """Runs periodic checks for updates in the background without blocking."""
         if delay_initial_seconds > 0:
             await asyncio.sleep(delay_initial_seconds)
 
         while True:
             try:
                 if self.get_auto_check_enabled():
-                    print("[AutoUpdater] Running scheduled background update check...")
                     await self.check_for_updates(manual=False)
             except Exception as e:
                 print(f"[AutoUpdater] Periodic check error: {e}")
 
-            hours = max(1, self.get_check_interval_hours())
-            await asyncio.sleep(hours * 3600)
+            interval_sec = max(3600, self.get_check_interval_hours() * 3600)
+            await asyncio.sleep(interval_sec)
 
     def stop(self):
         if self._periodic_task and not self._periodic_task.done():
@@ -556,7 +705,7 @@ exit
         if self._download_task and not self._download_task.done():
             self._download_task.cancel()
 
-    # ==================== Event Dispatch & Status Helper ====================
+    # ==================== Telemetry & Dispatch ====================
 
     def _dispatch_event(self, event: Dict[str, Any]):
         if self.event_callback:
@@ -580,6 +729,9 @@ exit
             "published_at": self.published_at,
             "html_url": self.html_url,
             "selected_asset": self.selected_asset,
+            "sha256sums_available": bool(self.sha256sums_url),
+            "verified_sha256": self.verified_sha256,
+            "sha256_verified": bool(self.verified_sha256),
             "download_progress": self.download_progress,
             "download_speed_kbps": round(self.download_speed_kbps, 1),
             "downloaded_bytes": self.downloaded_bytes,

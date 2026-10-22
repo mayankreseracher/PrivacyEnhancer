@@ -679,26 +679,28 @@ async def get_system_elevation():
         "mode": "full_privilege" if is_admin else "audit_only"
     }
 
+@app.post("/api/system/show")
+@app.get("/api/system/show")
+async def show_application_window():
+    """Wakes pywebview native window or opens browser dashboard when duplicate instance triggers."""
+    if hasattr(engine, "tray") and engine.tray and hasattr(engine.tray, "on_open_dashboard"):
+        try:
+            engine.tray.on_open_dashboard()
+        except Exception:
+            pass
+    return {"success": True, "message": "Window restored and brought to front."}
+
 @app.post("/api/system/elevate")
 async def request_system_elevation():
-    """Requests OS-level Administrator / root elevation."""
+    """Requests OS-level Administrator / root elevation with strict argument validation."""
     if sys.platform == "win32":
         try:
             import ctypes
             if ctypes.windll.shell32.IsUserAnAdmin():
                 return {"success": True, "already_elevated": True, "message": "TrackerControl is already running with full Administrator privileges."}
 
-            args = " ".join([f'"{a}"' for a in sys.argv[1:]])
-            if getattr(sys, "frozen", False):
-                hinstance = ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", sys.executable, args, None, 1
-                )
-            else:
-                hinstance = ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", sys.executable, f'"{sys.argv[0]}" {args}'.strip(), None, 1
-                )
-
-            if int(hinstance) > 32:
+            success, code, msg = PlatformHelper.request_windows_uac_elevation(sys.argv)
+            if success:
                 import asyncio
                 async def _exit():
                     await asyncio.sleep(1.0)
@@ -706,7 +708,7 @@ async def request_system_elevation():
                 asyncio.create_task(_exit())
                 return {"success": True, "message": "Administrator elevation prompt initiated. Relaunching with full privileges..."}
             else:
-                return {"success": False, "error": f"UAC prompt was cancelled or declined (code {hinstance})."}
+                return {"success": False, "error": msg}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
