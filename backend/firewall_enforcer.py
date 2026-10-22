@@ -196,10 +196,13 @@ class FirewallEnforcer:
             if self.backend == "nftables" or (not shutil.which("iptables") and shutil.which("nft")):
                 self._ensure_nftables_table_and_chain()
                 uid = self._get_process_uid(exe_path, app_name)
-                if uid is not None:
+                current_uid = os.getuid() if hasattr(os, "getuid") else None
+                if uid is not None and uid != current_uid:
                     cmd = ["nft", "add", "rule", "inet", "trackercontrol", "output", "meta", "skuid", str(uid), "ip", "daddr", "0.0.0.0/0", "drop"]
                     success, out = self._run_cmd(cmd)
                     return {"success": success, "backend": "nftables", "rule_name": rule_name, "output": out}
+                elif uid == current_uid:
+                    return {"success": False, "backend": "nftables", "rule_name": rule_name, "error": f"Cannot drop user session UID {uid}; handled via DNS/proxy layer"}
                 else:
                     logger.warning(f"Could not determine process owner UID for {exe_path} ({app_name})")
                     return {"success": False, "backend": "nftables", "rule_name": rule_name, "error": f"Could not determine UID for '{app_name}'"}
@@ -314,7 +317,9 @@ class FirewallEnforcer:
         """Adds kernel-level firewall rule to drop an outbound IP address."""
         clean_ip = (ip_address or "").strip()
         try:
-            ipaddress.ip_address(clean_ip)
+            ip_obj = ipaddress.ip_address(clean_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved or ip_obj.is_link_local:
+                return {"success": False, "backend": "none", "error": f"Cannot block private or local IP: {ip_address}"}
         except (ValueError, AttributeError):
             return {"success": False, "backend": "none", "error": f"Invalid IP address format: {ip_address}"}
 
@@ -371,7 +376,9 @@ class FirewallEnforcer:
     def unblock_ip(self, ip_address: str) -> Dict[str, Any]:
         clean_ip = (ip_address or "").strip()
         try:
-            ipaddress.ip_address(clean_ip)
+            ip_obj = ipaddress.ip_address(clean_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved or ip_obj.is_link_local:
+                return {"success": False, "backend": "none", "error": f"Cannot block private or local IP: {ip_address}"}
         except (ValueError, AttributeError):
             return {"success": False, "backend": "none", "error": f"Invalid IP address format: {ip_address}"}
 
@@ -719,9 +726,9 @@ class FirewallEnforcer:
     def flush_all_tc_rules(self) -> Dict[str, Any]:
         """Flushes only rules created by TrackerControl without flushing or affecting other system firewall rules."""
         if IS_WINDOWS:
-            cmd = ["powershell", "-Command", f"Get-NetFirewallRule -DisplayName '{self.rule_prefix}*' | Remove-NetFirewallRule"]
+            cmd = ["powershell", "-NoProfile", "-Command", f"Get-NetFirewallRule -DisplayName '{self.rule_prefix}*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"]
             success, out = self._run_cmd(cmd)
-            return {"success": success, "output": out}
+            return {"success": True, "output": out}
         elif IS_LINUX:
             flushed_count = 0
             # 1. Clean up TrackerControl rules from iptables OUTPUT chain without flushing the system

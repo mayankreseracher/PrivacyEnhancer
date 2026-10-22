@@ -131,7 +131,13 @@ def cleanup():
             try:
                 import asyncio
                 fut = asyncio.run_coroutine_threadsafe(engine.stop(), engine.loop)
-                fut.result(timeout=3)
+                fut.result(timeout=4)
+            except Exception:
+                pass
+        else:
+            try:
+                import asyncio
+                asyncio.run(engine.stop())
             except Exception:
                 pass
 
@@ -215,7 +221,7 @@ def run_service_mode():
         cleanup()
 
 
-def run_browser_mode(server_started: bool = False):
+def run_browser_mode(server_started: bool = False, existing_tray=None):
     """
     Fallback / command-line browser mode:
     Starts uvicorn normally and opens dashboard in the default web browser with persistent tray.
@@ -227,8 +233,11 @@ def run_browser_mode(server_started: bool = False):
     url = "http://127.0.0.1:8000"
     print(f"\n[+] TrackerControl Web Dashboard available at {url}")
 
-    tray = TrayService(engine=engine, on_open_dashboard=lambda: webbrowser.open(url), on_quit=cleanup)
-    tray.start()
+    if existing_tray:
+        tray = existing_tray
+    else:
+        tray = TrayService(engine=engine, on_open_dashboard=lambda: webbrowser.open(url), on_quit=cleanup)
+        tray.start()
 
     try:
         webbrowser.open(url)
@@ -275,8 +284,15 @@ def run_native_window():
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
 
-    # Give server a moment to start
-    time.sleep(1.5)
+    # Wait for server to bind port 8000 (up to 5s)
+    import socket
+    start_t = time.time()
+    while time.time() - start_t < 5.0:
+        try:
+            with socket.create_connection(("127.0.0.1", 8000), timeout=0.2):
+                break
+        except Exception:
+            time.sleep(0.1)
 
     # Initialize System Tray Sentry
     tray = TrayService(
@@ -314,7 +330,7 @@ def run_native_window():
 
     except Exception as e:
         print(f"[!] pywebview encountered error ({e}). Falling back to browser mode.")
-        run_browser_mode(server_started=True)
+        run_browser_mode(server_started=True, existing_tray=tray)
 
 
 def main():

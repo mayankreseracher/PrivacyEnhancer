@@ -203,6 +203,16 @@ function ensureRadarStatusOnline() {
   }
 }
 
+function ensureRadarStatusPolled() {
+  const pulse = document.getElementById("enginePulse");
+  const status = document.getElementById("engineStatus");
+  if (pulse) pulse.style.backgroundColor = "#00e5ff";
+  if (status && status.textContent !== "RADAR (HTTP POLL)") {
+    status.textContent = "RADAR (HTTP POLL)";
+    status.style.color = "#00e5ff";
+  }
+}
+
 function startWsHeartbeat() {
   if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
   wsHeartbeatTimer = setInterval(() => {
@@ -290,12 +300,14 @@ function initWebSocket() {
           const modeSelect = document.getElementById("shieldModeSelect");
           if (modeSelect) modeSelect.value = msg.data.protection_mode;
         }
-        if (msg.data.system_summary && msg.data.system_summary.os) {
+        const sysSum = msg.data.system_summary || (msg.data.stats && msg.data.stats.system_summary);
+        const osVal = sysSum ? (sysSum.os || sysSum.os_type) : null;
+        if (osVal) {
           const hostBadge = document.getElementById("hostOsBadge");
           if (hostBadge) {
-            const os = msg.data.system_summary.os.toLowerCase();
+            const os = osVal.toLowerCase();
             const osIcons = { windows: "🪟 Windows", linux: "🐧 Linux", darwin: "🍎 macOS" };
-            hostBadge.textContent = osIcons[os] || `🖥️ ${msg.data.system_summary.os}`;
+            hostBadge.textContent = osIcons[os] || `🖥️ ${osVal}`;
           }
         }
         if (msg.data.updater) {
@@ -347,7 +359,7 @@ function startFallbackPoller() {
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
       try {
         await bootstrapInitialState();
-        ensureRadarStatusOnline();
+        ensureRadarStatusPolled();
       } catch (e) {}
     }
   }, 2500);
@@ -457,7 +469,7 @@ function updateSpeedometers(point) {
   if (totRxEl) totRxEl.textContent = `${(point.total_rx_mb || 0).toFixed(2)} MB`;
   if (totTxEl) totTxEl.textContent = `${(point.total_tx_mb || 0).toFixed(2)} MB`;
   if (dropEl) dropEl.textContent = state.stats.blocked_trackers.toLocaleString();
-  if (socksEl) socksEl.textContent = (state.stats.monitored_apps || state.apps.length || 0).toString();
+  if (socksEl) socksEl.textContent = (point.active_sockets != null ? point.active_sockets : (state.connections.length || 0)).toString();
 }
 
 // ==================== GlassWire Security Alerts ====================
@@ -1634,9 +1646,9 @@ function renderAppPickerList() {
       ? `<span class="badge" style="background: rgba(0, 229, 255, 0.15); color: var(--accent-cyan); font-size: 0.65rem; padding: 1px 6px;">In Matrix</span>`
       : "";
 
-    const safeName = (app.name || "").replace(/'/g, "\\'");
-    const safeProc = (app.process_name || "").replace(/'/g, "\\'");
-    const safeExe = (app.exe_path || "").replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+    const encName = encodeURIComponent(app.name || "");
+    const encProc = encodeURIComponent(app.process_name || "");
+    const encExe = encodeURIComponent(app.exe_path || "");
 
     item.innerHTML = `
       <div class="app-item-info">
@@ -1656,10 +1668,10 @@ function renderAppPickerList() {
       </div>
 
       <div class="app-item-actions">
-        <button class="btn-action" title="Add to Privacy Matrix with Tracker Shielding" onclick="selectSystemApp('${safeName}', '${safeProc}', '${safeExe}', 'block_trackers')">
+        <button class="btn-action" title="Add to Privacy Matrix with Tracker Shielding" onclick="selectSystemApp(decodeURIComponent('${encName}'), decodeURIComponent('${encProc}'), decodeURIComponent('${encExe}'), 'block_trackers')">
           🛡️ Shield Trackers
         </button>
-        <button class="btn-action btn-danger" title="Block this app completely from internet via Windows Firewall" onclick="selectSystemApp('${safeName}', '${safeProc}', '${safeExe}', 'block_all')">
+        <button class="btn-action btn-danger" title="Block this app completely from internet via Windows Firewall" onclick="selectSystemApp(decodeURIComponent('${encName}'), decodeURIComponent('${encProc}'), decodeURIComponent('${encExe}'), 'block_all')">
           🛑 Block All
         </button>
       </div>
@@ -1694,8 +1706,9 @@ async function addCustomExecutable() {
   const pathInput = document.getElementById("customAppExePath");
   const nameInput = document.getElementById("customAppName");
   const exe_path = pathInput.value.trim();
-  const name = nameInput.value.trim() || exe_path.split("\\").pop() || "Custom App";
-  const process_name = exe_path.split("\\").pop() || `${name}.exe`;
+  const baseName = exe_path.split(/[\\\/]/).pop() || "Custom App";
+  const name = nameInput.value.trim() || baseName;
+  const process_name = baseName || `${name}.exe`;
 
   if (!exe_path) {
     showToast("Validation", "Please specify the path to the executable.", "warn");
@@ -1743,6 +1756,21 @@ async function loadVpnState() {
 
     // 7. App Split Tunneling Matrix
     renderAppRoutingMatrix();
+
+    // 8. Sync Kill Switch State
+    try {
+      const ksRes = await fetch(`${API_BASE}/api/vpn/killswitch`);
+      if (ksRes.ok) {
+        const ksData = await ksRes.json();
+        const ksToggle = document.getElementById("killSwitchToggle");
+        const ksLbl = document.getElementById("killSwitchLabel");
+        if (ksToggle) ksToggle.checked = !!ksData.kill_switch_active;
+        if (ksLbl) {
+          ksLbl.textContent = ksData.kill_switch_active ? "ACTIVE" : "DISABLED";
+          ksLbl.style.color = ksData.kill_switch_active ? "#00ff9d" : "var(--text-muted)";
+        }
+      }
+    } catch (e) {}
   } catch (err) {
     console.error("Error loading VPN state:", err);
   }
@@ -2180,10 +2208,10 @@ function renderAppRoutingMatrix() {
       statusBadge = `<span class="badge badge-allowed" style="background: rgba(0,255,157,0.15); color: #00ff9d; border: 1px solid rgba(0,255,157,0.3);">
         ${flag} Routed: ${escapeHtml(tname)}
       </span>`;
-      const safeProc = (app.process_name || "").replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-      const safeExe = (app.exe_path || "").replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-      const safeTid = (boundTid || "").replace(/'/g, "\\'");
-      launchBtn = `<button class="btn-action" style="padding: 3px 8px; font-size: 0.72rem; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px;" onclick="launchAppWithVpn('${safeProc}', '${safeExe}', '${safeTid}')">
+      const encProc = encodeURIComponent(app.process_name || "");
+      const encExe = encodeURIComponent(app.exe_path || "");
+      const encTid = encodeURIComponent(boundTid || "");
+      launchBtn = `<button class="btn-action" style="padding: 3px 8px; font-size: 0.72rem; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px;" onclick="launchAppWithVpn(decodeURIComponent('${encProc}'), decodeURIComponent('${encExe}'), decodeURIComponent('${encTid}'))">
         <span>🚀</span> Launch via VPN
       </button>`;
     }

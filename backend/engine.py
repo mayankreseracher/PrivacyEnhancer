@@ -89,6 +89,10 @@ class TrackerEngine:
     def _dispatch_coro(self, coro):
         """Thread-safe coroutine scheduler for WebSocket broadcasts across background threads."""
         if not self.active_websockets:
+            try:
+                coro.close()
+            except Exception:
+                pass
             return
         if self.loop and self.loop.is_running():
             try:
@@ -100,6 +104,11 @@ class TrackerEngine:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 loop.create_task(coro)
+                return
+        except Exception:
+            pass
+        try:
+            coro.close()
         except Exception:
             pass
 
@@ -218,6 +227,9 @@ class TrackerEngine:
                 self.last_io_time = now
 
                 recent_blocked = sum(1 for e in self.recent_events_cache if e.get("status") == "blocked" and now - e.get("timestamp", 0) < 5)
+                active_sockets = 0
+                if hasattr(self, "process_monitor") and self.process_monitor:
+                    active_sockets = len(getattr(self.process_monitor, "seen_connections", set()))
 
                 point = {
                     "timestamp": now,
@@ -225,7 +237,8 @@ class TrackerEngine:
                     "tx_kbps": round(tx_speed_kbps, 2),
                     "total_rx_mb": round(rx_bytes / 1024 / 1024, 2),
                     "total_tx_mb": round(tx_bytes / 1024 / 1024, 2),
-                    "blocked_recent": recent_blocked
+                    "blocked_recent": recent_blocked,
+                    "active_sockets": active_sockets
                 }
 
                 self.bandwidth_history.append(point)
@@ -400,11 +413,18 @@ class TrackerEngine:
                 self.firewall.flush_all_tc_rules()
             except Exception as e:
                 print(f"[Engine] Notice during firewall cleanup: {e}")
-        if hasattr(self, "wireguard") and self.wireguard and hasattr(self.wireguard, "proxy_manager"):
+        if hasattr(self, "wireguard") and self.wireguard:
             try:
-                await self.wireguard.proxy_manager.stop_all()
+                for tid, t in list(self.wireguard.tunnels.items()):
+                    if t.get("status") == "Connected":
+                        self.wireguard.disconnect_tunnel(tid)
             except Exception:
                 pass
+            if hasattr(self.wireguard, "proxy_manager"):
+                try:
+                    await self.wireguard.proxy_manager.stop_all()
+                except Exception:
+                    pass
         if hasattr(self, "orbot") and self.orbot:
             try:
                 self.orbot.stop_tor_service()

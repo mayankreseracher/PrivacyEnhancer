@@ -127,6 +127,13 @@ class Database:
             is_blocked = 1 if event.get("status") == "blocked" else 0
             is_tracker = 1 if event.get("category") not in ["Functional", "CDN/Infrastructure", "Unknown"] else 0
 
+            # Canonicalize: If exe_path is just process name, match against existing full path
+            if exe_path == proc_name and proc_name != "Unknown":
+                cursor.execute("SELECT exe_path FROM apps WHERE process_name = ? AND exe_path != ? LIMIT 1", (proc_name, proc_name))
+                existing = cursor.fetchone()
+                if existing and existing["exe_path"]:
+                    exe_path = existing["exe_path"]
+
             cursor.execute("""
                 INSERT INTO apps (
                     exe_path, process_name, display_name, first_seen, last_seen,
@@ -205,6 +212,10 @@ class Database:
             if row:
                 return row["control_mode"]
             return "block_trackers"
+
+    def get_app_rule(self, exe_path: str, process_name: Optional[str] = None) -> str:
+        """Backward-compatible alias for get_app_mode."""
+        return self.get_app_mode(exe_path, process_name)
 
     def get_stats(self) -> Dict[str, Any]:
         with self.get_connection() as conn:

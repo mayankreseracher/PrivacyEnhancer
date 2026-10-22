@@ -21,11 +21,18 @@ FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
 app = FastAPI(title="TrackerControl PC", version="1.0.8")
 
-# Enable CORS (allow all origins with credentials=False for security)
+# Enable CORS restricted to localhost & local dashboard for CSRF & RCE security
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://127.0.0.1",
+        "http://localhost",
+        "null"
+    ],
+    allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -395,6 +402,12 @@ async def launch_app_with_vpn(payload: LaunchAppVpnRequest):
 
     if not exe_path or not os.path.exists(exe_path):
         return {"success": False, "error": f"Executable not found on system for '{payload.process_name}'"}
+
+    # Security Guard: Block direct launch of dangerous system interpreters & script hosts
+    base_bin = os.path.basename(exe_path).lower()
+    disallowed_bins = {"cmd.exe", "powershell.exe", "pwsh.exe", "cscript.exe", "wscript.exe", "mshta.exe", "rundll32.exe", "bash", "sh", "zsh"}
+    if base_bin in disallowed_bins:
+        return {"success": False, "error": f"Launching shell interpreter '{base_bin}' via proxy is disallowed for security"}
 
     tunnel_info = engine.wireguard.tunnels.get(tunnel_id) if tunnel_id in engine.wireguard.tunnels else None
     proxy_url = tunnel_info.get("proxy_url") if tunnel_info else ("socks5://127.0.0.1:9050" if tunnel_id == "orbot" else None)

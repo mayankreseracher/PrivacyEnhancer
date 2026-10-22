@@ -249,6 +249,16 @@ class ProcessMonitor:
 
         return result
 
+    def _is_private_or_local(self, ip_str: str) -> bool:
+        if not ip_str or ip_str in ("0.0.0.0", "::", "127.0.0.1", "localhost"):
+            return True
+        try:
+            import ipaddress
+            ip_obj = ipaddress.ip_address(ip_str)
+            return ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved or ip_obj.is_link_local
+        except Exception:
+            return True
+
     async def scan_once(self):
         loop = asyncio.get_event_loop()
         try:
@@ -386,11 +396,14 @@ class ProcessMonitor:
             if status == "blocked" and self.shield_active:
                 if self.protection_mode in ("MAX_PRIVACY", "LOCKDOWN"):
                     if self.firewall and remote_ip not in self.blocked_ips:
-                        try:
-                            self.firewall.block_ip(remote_ip)
-                        except Exception as e:
-                            print(f"[ProcessMonitor] Error blocking IP {remote_ip}: {e}")
-                        self.blocked_ips.add(remote_ip)
+                        if not self._is_private_or_local(remote_ip):
+                            try:
+                                self.firewall.block_ip(remote_ip)
+                            except Exception as e:
+                                print(f"[ProcessMonitor] Error blocking IP {remote_ip}: {e}")
+                            if len(self.blocked_ips) > 1000:
+                                self.blocked_ips.clear()
+                            self.blocked_ips.add(remote_ip)
 
             # Assemble event
             event = {

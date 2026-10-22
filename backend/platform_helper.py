@@ -154,6 +154,7 @@ class PlatformHelper:
         arch = platform.machine()
         summary = {
             "os_type": os_type,
+            "os": os_type,
             "architecture": arch,
             "python_version": platform.python_version(),
             "is_windows": IS_WINDOWS,
