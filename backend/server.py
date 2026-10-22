@@ -299,12 +299,34 @@ async def save_proton_auth(payload: ProtonAuthRequest):
     )
     return res
 
+@app.get("/api/vpn/wireguard/generate-keypair")
+async def generate_wireguard_keypair():
+    import base64
+    priv_bytes = bytearray(os.urandom(32))
+    priv_bytes[0] &= 248
+    priv_bytes[31] &= 127
+    priv_bytes[31] |= 64
+    priv_b64 = base64.b64encode(bytes(priv_bytes)).decode("ascii")
+    return {
+        "success": True,
+        "private_key": priv_b64,
+        "address": "10.2.0.2/32"
+    }
+
 class DeployProtonTunnelRequest(BaseModel):
     server_id: str
     custom_name: Optional[str] = None
 
 @app.post("/api/vpn/proton/deploy")
 async def deploy_proton_server(payload: DeployProtonTunnelRequest):
+    auth_status = engine.proton.get_auth_status()
+    if not auth_status.get("configured"):
+        return {
+            "success": False,
+            "auth_required": True,
+            "error": "Proton WireGuard credentials required. Please click '🔑 Proton VPN Auth' to enter your credentials or paste your Proton .conf before deploying."
+        }
+
     # Derive unique virtual subnet IP for each tunnel (e.g. 10.2.0.2, 10.2.1.2)
     existing_count = len(engine.wireguard.tunnels)
     unique_ip = f"10.2.{existing_count}.2/32"

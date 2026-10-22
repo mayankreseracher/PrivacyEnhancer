@@ -107,17 +107,43 @@ class Socks5RelayServer:
                     # Create socket bound to virtual VPN IP (anti-leak protection: never fallback to clearnet)
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.setblocking(False)
+                    clean_ip = self.bind_interface_ip.split("/")[0].strip()
                     try:
-                        clean_ip = self.bind_interface_ip.split("/")[0].strip()
                         sock.bind((clean_ip, 0))
                     except Exception as bind_err:
-                        # Anti-leak sentry: If binding to the specified VPN interface fails,
-                        # REJECT connection to prevent silent clearnet data leakage
-                        print(f"[Socks5Gateway] Anti-Leak Protection: Cannot bind to VPN interface {clean_ip} ({bind_err}). Rejecting clearnet leak.")
-                        client_writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
-                        await client_writer.drain()
-                        client_writer.close()
-                        return
+                        # Fallback to any active VPN interface on host (e.g. ProtonVPN 10.2.0.2)
+                        active_vpn_ip = None
+                        try:
+                            import psutil
+                            for if_name, if_addrs in psutil.net_if_addrs().items():
+                                if any(k in if_name.lower() for k in ["proton", "wireguard", "wg", "tun"]):
+                                    for a in if_addrs:
+                                        if getattr(a, "family", None) and getattr(a.family, "name", "") == "AF_INET":
+                                            if a.address and a.address != clean_ip:
+                                                active_vpn_ip = a.address
+                                                break
+                                if active_vpn_ip:
+                                    break
+                        except Exception:
+                            pass
+
+                        if active_vpn_ip:
+                            try:
+                                sock.bind((active_vpn_ip, 0))
+                            except Exception as fallback_err:
+                                print(f"[Socks5Gateway] Anti-Leak Protection: Cannot bind to {clean_ip} or fallback {active_vpn_ip} ({fallback_err}).")
+                                client_writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
+                                await client_writer.drain()
+                                client_writer.close()
+                                return
+                        else:
+                            # Anti-leak sentry: If binding to the specified VPN interface fails,
+                            # REJECT connection to prevent silent clearnet data leakage
+                            print(f"[Socks5Gateway] Anti-Leak Protection: Cannot bind to VPN interface {clean_ip} ({bind_err}). Rejecting clearnet leak.")
+                            client_writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
+                            await client_writer.drain()
+                            client_writer.close()
+                            return
                     
                     await asyncio.wait_for(
                         loop.sock_connect(sock, (dest_host, dest_port)),

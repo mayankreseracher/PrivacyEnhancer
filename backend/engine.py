@@ -350,6 +350,27 @@ class TrackerEngine:
             self._updater_task = asyncio.create_task(self.updater.start_periodic_check(delay_initial_seconds=4))
             print("[AutoUpdater] Background update sentry initialized.")
 
+        # Ensure Multi-VPN SOCKS5 split-tunneling proxies are running for active tunnels
+        if hasattr(self, "wireguard") and self.wireguard and hasattr(self.wireguard, "proxy_manager"):
+            try:
+                self.wireguard._detect_system_vpn_interfaces()
+                await self.wireguard.proxy_manager.sync_tunnels(self.wireguard.tunnels)
+                print(f"[WireGuard] Initialized SOCKS5 split-tunneling proxies ({len(self.wireguard.tunnels)} active).")
+            except Exception as e:
+                print(f"[WireGuard] Proxy sync error on startup: {e}")
+
+        # Auto-start Orbot / Tor daemon if available and enabled (default True)
+        if hasattr(self, "orbot") and self.orbot:
+            try:
+                tor_bin = self.orbot.find_tor_binary()
+                auto_tor = self.database.get_setting("orbot_auto_start", "true").lower() in ("true", "1")
+                if auto_tor and tor_bin:
+                    print(f"[Orbot] Auto-launching detected Tor daemon ({tor_bin}) in background...")
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, self.orbot.start_tor_service)
+            except Exception as e:
+                print(f"[Orbot] Notice during auto-start: {e}")
+
     async def stop(self):
         print("[Engine] Stopping TrackerControl PC...")
         if hasattr(self, "updater") and self.updater:

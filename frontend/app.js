@@ -211,10 +211,10 @@ function startWsHeartbeat() {
         state.ws.send(JSON.stringify({ type: "PING", timestamp: Date.now() }));
       } catch (e) {}
     }
-    // Watchdog check: If no packet has arrived for 12 seconds, force reconnect
+    // Watchdog check: If no message has arrived for 35 seconds, force reconnect
     const elapsed = Date.now() - wsLastMessageTime;
-    if (elapsed > 12000) {
-      console.warn("[Radar] Watchdog timeout: No frames for 12s. Reconnecting socket...");
+    if (elapsed > 35000) {
+      console.warn("[Radar] Watchdog timeout: No heartbeat for 35s. Reconnecting socket...");
       if (state.ws) {
         try { state.ws.close(); } catch (e) {}
       }
@@ -260,6 +260,8 @@ function initWebSocket() {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === "PONG") {
+        wsLastMessageTime = Date.now();
+        ensureRadarStatusOnline();
         return;
       }
       if (msg.type === "INIT_STATE") {
@@ -1514,6 +1516,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const saveProtonAuthBtn = document.getElementById("saveProtonAuthBtn");
   if (saveProtonAuthBtn) saveProtonAuthBtn.addEventListener("click", saveProtonAuth);
 
+  const genKeyBtn = document.getElementById("genWireguardKeypairBtn");
+  if (genKeyBtn) {
+    genKeyBtn.addEventListener("click", async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/vpn/wireguard/generate-keypair`);
+        const data = await res.json();
+        if (data.private_key) {
+          document.getElementById("protonPrivateKeyInput").value = data.private_key;
+          document.getElementById("protonAddressInput").value = data.address || "10.2.0.2/32";
+          showToast("Keypair Generated", "New WireGuard private key generated! Click 'Save' to apply.", "success");
+        }
+      } catch (e) {
+        showToast("Keygen Error", "Could not generate keypair: " + e, "error");
+      }
+    });
+  }
+
   const saveCustomTunnelBtn = document.getElementById("saveCustomTunnelBtn");
   if (saveCustomTunnelBtn) saveCustomTunnelBtn.addEventListener("click", saveCustomTunnel);
 
@@ -1867,14 +1886,22 @@ function renderProtonAuthBanner() {
   const sub = document.getElementById("protonStatusSub");
   const badge = document.getElementById("protonAuthBadge");
 
-  if (auth.configured) {
-    title.textContent = `Proton WireGuard Ready (${auth.tier} Plan)`;
-    sub.textContent = `Assigned Client IP: ${auth.address} | Authenticated for WireGuard Deployment`;
-    badge.innerHTML = `<span class="badge badge-allowed">Proton Auth Active</span>`;
+  const systemProtonTunnel = (state.vpnTunnels || []).find(
+    t => (t.tunnel_type === "proton" || (t.name && t.name.toLowerCase().includes("proton"))) && t.status === "Connected"
+  );
+
+  if (systemProtonTunnel) {
+    if (title) title.textContent = "Proton VPN Active (System Tunnel Connected)";
+    if (sub) sub.textContent = `Live traffic encrypted via official Proton VPN client (Interface: ${systemProtonTunnel.interface_name || 'ProtonVPN'}, IP: ${systemProtonTunnel.address || '10.2.0.2'}).`;
+    if (badge) badge.innerHTML = `<span class="badge badge-allowed" style="background: rgba(0, 255, 157, 0.2); color: #00ff9d;">🟢 System VPN Active</span>`;
+  } else if (auth.configured) {
+    if (title) title.textContent = `Proton WireGuard Ready (${auth.tier} Plan)`;
+    if (sub) sub.textContent = `Assigned Client IP: ${auth.address} | Authenticated for WireGuard Deployment`;
+    if (badge) badge.innerHTML = `<span class="badge badge-allowed">Proton Auth Active</span>`;
   } else {
-    title.textContent = "Proton WireGuard: Credentials Needed";
-    sub.textContent = "Click '🔑 Proton VPN Auth' to enter WireGuard credentials or paste your Proton .conf.";
-    badge.innerHTML = `<span class="badge badge-telemetry">Auth Required</span>`;
+    if (title) title.textContent = "Proton WireGuard: Credentials Needed";
+    if (sub) sub.textContent = "Click '🔑 Proton VPN Auth' to enter WireGuard credentials or paste your Proton .conf.";
+    if (badge) badge.innerHTML = `<span class="badge badge-telemetry">Auth Required</span>`;
   }
 }
 
@@ -2019,9 +2046,17 @@ async function deployProtonServer(serverId, name) {
       body: JSON.stringify({ server_id: serverId, custom_name: `Proton ${name}` })
     });
     const data = await res.json();
+    if (data.auth_required) {
+      showToast("Proton Auth Required", data.error || "Please enter WireGuard credentials or paste a .conf in '🔑 Proton VPN Auth'.", "warn");
+      const modal = document.getElementById("protonAuthModal");
+      if (modal) modal.classList.add("open");
+      return;
+    }
     if (data.success) {
       showToast("WireGuard Deployed", `Tunnel deployed for Proton ${name}! Activated in tunnel list.`, "success");
       loadVpnState();
+    } else {
+      showToast("Deployment Notice", data.error || "Could not deploy WireGuard tunnel.", "warn");
     }
   } catch (err) {
     showToast("VPN Error", "Error deploying Proton WireGuard tunnel: " + err, "error");

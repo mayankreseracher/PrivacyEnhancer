@@ -38,6 +38,8 @@ class OrbotService:
         self.active_http_port: Optional[int] = None
         self.last_identity_check: Optional[Dict[str, Any]] = None
         self.last_check_time: float = 0
+        self._cached_clearnet_ip: Optional[str] = None
+        self._last_clearnet_time: float = 0
         self.managed_process: Optional[subprocess.Popen] = None
         self.tor_binary_path: Optional[str] = None
         
@@ -150,8 +152,7 @@ class OrbotService:
             "--ControlPort", "9051",
             "--DataDirectory", tor_data_dir,
             "--DisableNetwork", "0",
-            "--CookieAuthentication", "0",
-            "--HashedControlPassword", ""
+            "--CookieAuthentication", "0"
         ]
 
         # Locate geoip files if in adjacent folders
@@ -183,8 +184,8 @@ class OrbotService:
             )
             self.managed_process = proc
 
-            # Wait for ports to become active
-            for _ in range(20):
+            # Wait up to 10 seconds for Tor SOCKS5 and ControlPort to become active
+            for _ in range(30):
                 time.sleep(0.3)
                 if self.check_port_open(9050):
                     break
@@ -300,17 +301,20 @@ class OrbotService:
             return self.last_identity_check
 
         status = self.detect_status()
-        clearnet_ip = "Unknown"
+        clearnet_ip = self._cached_clearnet_ip or "Unknown"
         tor_exit_ip = None
         tor_verified = False
 
-        # 1. Clearnet IP
-        try:
-            req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "TrackerControl-PC"})
-            with urllib.request.urlopen(req, timeout=4) as resp:
-                clearnet_ip = json.loads(resp.read().decode("utf-8")).get("ip", "Unknown")
-        except Exception:
-            pass
+        # 1. Clearnet IP with 120s caching to avoid lagging on slower networks
+        if not self._cached_clearnet_ip or (now - self._last_clearnet_time > 120):
+            try:
+                req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "TrackerControl-PC"})
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    clearnet_ip = json.loads(resp.read().decode("utf-8")).get("ip", "Unknown")
+                    self._cached_clearnet_ip = clearnet_ip
+                    self._last_clearnet_time = now
+            except Exception:
+                pass
 
         # 2. Tor exit IP via SOCKS5 if active
         if status["is_running"]:

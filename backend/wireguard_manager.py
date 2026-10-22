@@ -273,7 +273,10 @@ PersistentKeepalive = 25
         iface = tunnel.get("interface_name", tunnel_id)
 
         if activate:
-            tunnel["status"] = "Connected"
+            if tunnel.get("private_key") == "CLIENT_PRIVATE_KEY_HERE":
+                tunnel["status"] = "Auth Required"
+                return {"success": False, "tunnel_id": tunnel_id, "status": "Auth Required", "error": "Proton WireGuard credentials required. Please configure '🔑 Proton VPN Auth'."}
+
             if conf_path and os.path.exists(conf_path):
                 if IS_WINDOWS:
                     wg_win = self._get_windows_wireguard_bin()
@@ -284,18 +287,24 @@ PersistentKeepalive = 25
                                 capture_output=True,
                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
                             )
-                            if res.returncode != 0:
+                            if res.returncode == 0:
+                                tunnel["status"] = "Connected"
+                            else:
                                 tunnel["status"] = "Error"
                         except Exception:
                             tunnel["status"] = "Error"
                     else:
-                        print("[WireGuard] Notice: wireguard.exe not installed or not in PATH. Tunnel profile created.")
+                        print("[WireGuard] Notice: wireguard.exe not installed on Windows.")
+                        tunnel["status"] = "Requires WireGuard"
+                        return {"success": False, "tunnel_id": tunnel_id, "status": "Requires WireGuard", "error": "wireguard.exe is not installed on Windows. Please install the official WireGuard client for Windows."}
                 elif IS_LINUX:
                     # Use wg-quick up
                     if shutil.which("wg-quick"):
                         try:
                             res = subprocess.run(["wg-quick", "up", conf_path], capture_output=True)
-                            if res.returncode != 0:
+                            if res.returncode == 0:
+                                tunnel["status"] = "Connected"
+                            else:
                                 tunnel["status"] = "Error"
                         except Exception:
                             tunnel["status"] = "Error"
@@ -304,17 +313,26 @@ PersistentKeepalive = 25
                             subprocess.run(["ip", "link", "add", "dev", iface, "type", "wireguard"], capture_output=True)
                             subprocess.run(["wg", "setconf", iface, conf_path], capture_output=True)
                             subprocess.run(["ip", "link", "set", "up", "dev", iface], capture_output=True)
+                            tunnel["status"] = "Connected"
                         except Exception:
                             tunnel["status"] = "Error"
+                    else:
+                        tunnel["status"] = "Requires WireGuard"
                 elif IS_MACOS:
                     wg_bin = self._get_wg_quick_bin()
                     if wg_bin and conf_path:
                         try:
                             res = subprocess.run([wg_bin, "up", conf_path], capture_output=True)
-                            if res.returncode != 0:
+                            if res.returncode == 0:
+                                tunnel["status"] = "Connected"
+                            else:
                                 tunnel["status"] = "Error"
                         except Exception:
                             tunnel["status"] = "Error"
+                    else:
+                        tunnel["status"] = "Requires WireGuard"
+            else:
+                tunnel["status"] = "Connected"
         else:
             tunnel["status"] = "Disconnected"
             if IS_WINDOWS:
