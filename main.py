@@ -32,6 +32,7 @@ _cleaned_up = False
 _instance_mutex = None
 _lock_file = None
 
+
 def acquire_single_instance_lock() -> bool:
     """
     Enforces OS-level single instance application lifecycle.
@@ -62,6 +63,7 @@ def acquire_single_instance_lock() -> bool:
         except Exception:
             return False
 
+
 def wake_existing_instance():
     """Notifies already-running TrackerControl instance to bring native window to front."""
     try:
@@ -79,6 +81,17 @@ def wake_existing_instance():
             webbrowser.open("http://127.0.0.1:8000")
         except Exception:
             pass
+
+
+def resolve_bind_host() -> str:
+    """Default to localhost-only unless remote access is explicitly enabled."""
+    allow_remote = os.environ.get("TRACKERCONTROL_ALLOW_REMOTE", "0").lower() in ("1", "true", "yes", "on")
+    forced_remote = any(arg in sys.argv for arg in ("--lan", "--public"))
+    if forced_remote and not allow_remote:
+        print("[!] Refusing to expose TrackerControl on a public/LAN interface without TRACKERCONTROL_ALLOW_REMOTE=1")
+        print("[!] Falling back to localhost-only binding.")
+        return "127.0.0.1"
+    return "0.0.0.0" if forced_remote and allow_remote else "127.0.0.1"
 
 
 def check_elevation(auto_elevate: bool = True) -> bool:
@@ -135,18 +148,18 @@ def print_banner():
     firewall = summary.get("firewall_backend", "Universal Software Filter")
 
     banner = f"""
-========================================================================
-  [+] TRACKERCONTROL PC -- SOVEREIGN DESKTOP PRIVACY GUARD
-  [+] High-Speed Process Attribution & OS Telemetry Neutralizer
-========================================================================
-  [+] Host Platform:       {os_name}
-  [+] Firewall Engine:     {firewall}
-  [+] Web Dashboard:       http://localhost:8000
-  [+] Process Monitor:     Active (Continuous Real-Time Socket Interception)
-  [+] Threat Intelligence: 4,500+ Signatures Loaded (Exodus, Disconnect, SpyBlocker)
-  [+] Protection Mode:     MAX_PRIVACY (Strict)
-========================================================================
-    """
+=======================================================================
+   [+] TRACKERCONTROL PC -- SOVEREIGN DESKTOP PRIVACY GUARD
+   [+] High-Speed Process Attribution & OS Telemetry Neutralizer
+=======================================================================
+   [+] Host Platform:       {os_name}
+   [+] Firewall Engine:     {firewall}
+   [+] Web Dashboard:       http://localhost:8000
+   [+] Process Monitor:     Active (Continuous Real-Time Socket Interception)
+   [+] Threat Intelligence: 4,500+ Signatures Loaded (Exodus, Disconnect, SpyBlocker)
+   [+] Protection Mode:     MAX_PRIVACY (Strict)
+=======================================================================
+     """
     print(banner)
 
 
@@ -257,6 +270,7 @@ def run_service_mode():
     Continuous background service mode (ideal for Windows Service, systemd, or launchd).
     Runs FastAPI server, DNS sinkhole, Firewall, and WireGuard tunnels without opening a GUI window.
     """
+    import webbrowser
     from backend.server import app, engine
     from backend.tray_service import TrayService
 
@@ -265,7 +279,7 @@ def run_service_mode():
     engine.set_tray(tray)
     tray.start()
 
-    bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+    bind_host = resolve_bind_host()
     try:
         uvicorn.run(app, host=bind_host, port=8000, log_level="warning")
     except (KeyboardInterrupt, SystemExit):
@@ -297,7 +311,7 @@ def run_browser_mode(server_started: bool = False, existing_tray=None):
         print(f"[!] Could not open default web browser: {e}")
 
     if not server_started:
-        bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+        bind_host = resolve_bind_host()
         try:
             uvicorn.run(app, host=bind_host, port=8000, log_level="info")
         except (KeyboardInterrupt, SystemExit):
@@ -329,7 +343,7 @@ def run_native_window():
     import webbrowser
 
     def start_server():
-        bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+        bind_host = resolve_bind_host()
         uvicorn.run(app, host=bind_host, port=8000, log_level="warning")
 
     # Start FastAPI server in background thread
@@ -460,7 +474,14 @@ def main():
 
     # Check for service/daemon mode
     is_service = any(arg in sys.argv for arg in ("--service", "--daemon", "--background", "--minimized"))
-    if is_service:
+    background_env = os.environ.get("TRACKERCONTROL_BACKGROUND_MODE", "0").lower() in ("1", "true", "yes", "on")
+    no_display = (
+        sys.platform.startswith("linux") and
+        not os.environ.get("DISPLAY") and
+        not os.environ.get("WAYLAND_DISPLAY")
+    )
+
+    if is_service or background_env or no_display:
         run_service_mode()
         return
 
