@@ -7,9 +7,10 @@ import os
 import sys
 import csv
 import io
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+import secrets
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -21,6 +22,81 @@ from .credential_vault import vault
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
 app = FastAPI(title="TrackerControl PC", version="1.1.0")
+
+API_KEY_HEADER_NAME = "X-API-Key"
+
+def _runtime_api_key() -> str:
+    """Returns the configured API key, creating one on first use if needed."""
+    env_key = os.environ.get("TRACKERCONTROL_API_KEY")
+    if env_key:
+        return env_key.strip()
+
+    data_dir = PlatformHelper.get_data_dir()
+    key_file = os.path.join(data_dir, ".api_key")
+    if os.path.exists(key_file):
+        try:
+            with open(key_file, "r", encoding="utf-8") as f:
+                key = f.read().strip()
+            if key:
+                return key
+        except Exception:
+            pass
+
+    key = secrets.token_urlsafe(32)
+    try:
+        with open(key_file, "w", encoding="utf-8") as f:
+            f.write(key)
+        os.chmod(key_file, 0o600)
+    except Exception:
+        pass
+    return key
+
+
+def _is_local_request(request: Request) -> bool:
+    """Only allow loopback requests by default; public/LAN requires explicit opt-in."""
+    allow_remote = os.environ.get("TRACKERCONTROL_ALLOW_REMOTE", "0").lower() in ("1", "true", "yes", "on")
+    if allow_remote:
+        return True
+
+    client = request.client
+    host = (client.host if client else "")
+    if not host:
+        return False
+    host = host.strip().lower()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    if host.startswith("127."):
+        return True
+    if host.startswith("::1"):
+        return True
+    return False
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Enforce loopback-only access and API key protection for privileged operations."""
+    path = request.url.path
+    if path.startswith("/api") or path.startswith("/ws"):
+        if not _is_local_request(request):
+            return JSONResponse(
+                status_code=403,
+                content={"success": False, "error": "Local access is required. Public/LAN binding is disabled by default."}
+            )
+
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            provided = request.headers.get(API_KEY_HEADER_NAME)
+            if not provided:
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.lower().startswith("bearer "):
+                    provided = auth_header.split(" ", 1)[1].strip()
+            if provided != _runtime_api_key():
+                return JSONResponse(
+                    status_code=401,
+                    content={"success": False, "error": "Invalid or missing API key."}
+                )
+
+    return await call_next(request)
+
 
 # Enable CORS restricted to localhost & local dashboard for CSRF & RCE security
 app.add_middleware(
@@ -35,7 +111,7 @@ app.add_middleware(
     allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-API-Key"],
 )
 
 engine = TrackerEngine()
@@ -758,3 +834,19 @@ async def root():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+
+# Expose API key and local-only config for integration/testing
+@app.get("/api/system/security")
+async def get_security_status():
+    return {
+        "localhost_only": not os.environ.get("TRACKERCONTROL_ALLOW_REMOTE", "0").lower() in ("1", "true", "yes", "on"),
+        "api_key_configured": bool(os.environ.get("TRACKERCONTROL_API_KEY") or os.path.exists(os.path.join(PlatformHelper.get_data_dir(), ".api_key"))),
+        "api_key_set": bool(_runtime_api_key())
+    }
+
+
+"""
+Legacy note: public/LAN bindings are disabled by default to prevent accidental exposure.
+Set TRACKERCONTROL_ALLOW_REMOTE=1 and pass --lan/--public only when you intentionally want remote access.
+"""
