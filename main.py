@@ -202,6 +202,18 @@ except Exception:
     pass
 
 
+def _unhandled_exception_handler(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    print(f"\n[CRITICAL] Unhandled Exception: {exc_type.__name__}: {exc_value}")
+    cleanup()
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
+sys.excepthook = _unhandled_exception_handler
+
+
 def run_service_mode():
     """
     Continuous background service mode (ideal for Windows Service, systemd, or launchd).
@@ -368,6 +380,32 @@ def run_native_window():
 
 def main():
     """Main application entry point."""
+    # Emergency CLI DNS restore handler (operates without starting GUI or webserver)
+    if any(arg in sys.argv for arg in ("--restore-dns", "--repair-dns", "--reset-dns")):
+        print("=" * 72)
+        print(" [*] TrackerControl PC — Emergency System DNS Restoration Watchdog")
+        print("=" * 72)
+        from backend.dns_proxy import DNSProxy
+        from backend.database import Database
+        from backend.tracker_intelligence import TrackerIntelligence
+        try:
+            db = Database()
+            intel = TrackerIntelligence()
+            proxy = DNSProxy(intel, db)
+            success = proxy.restore_system_dns(force_clean_all=True)
+            if success:
+                print("[+] System DNS successfully restored to default OS / DHCP settings.")
+                print("[+] Resolver cache cleared. Internet connectivity restored.")
+            else:
+                print("[!] Could not automatically restore DNS. Ensure you run with Admin privileges.")
+            global _cleaned_up
+            _cleaned_up = True
+            sys.exit(0 if success else 1)
+        except Exception as e:
+            print(f"[!] Error during DNS restoration: {e}")
+            _cleaned_up = True
+            sys.exit(1)
+
     # 1. Admin Elevation Check at the very start of main()
     check_elevation()
 

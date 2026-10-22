@@ -7,6 +7,7 @@ Also maintains an IP -> Domain cache for process socket attribution.
 
 import asyncio
 import atexit
+import json
 import os
 import shutil
 import socket
@@ -15,6 +16,10 @@ import sys
 import time
 from typing import Dict, Any, List, Optional, Callable
 from dnslib import DNSRecord, DNSHeader, RR, A, AAAA, QTYPE, RCODE
+from .platform_helper import PlatformHelper
+
+DATA_DIR = PlatformHelper.get_data_dir()
+DNS_BACKUP_FILE = os.path.join(DATA_DIR, "original_dns_backup.json")
 
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
@@ -194,22 +199,33 @@ class DNSProxy:
         return (await self._forward_upstream(data)) or b""
 
     def _forward_upstream_sync(self, data: bytes) -> Optional[bytes]:
-        """Synchronous UDP query to upstream DNS resolver (executed in thread pool)."""
-        sock = None
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(2.0)
-            sock.sendto(data, (self.upstream_dns, self.upstream_port))
-            resp, _ = sock.recvfrom(4096)
-            return resp
-        except Exception:
-            return None
-        finally:
-            if sock:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
+        """
+        Synchronous UDP query to upstream DNS resolver with resilient fail-open
+        fallback across primary and secondary upstream resolvers (1.1.1.1, 9.9.9.9, 8.8.8.8).
+        """
+        candidate_resolvers = [self.upstream_dns]
+        for fallback in ("1.1.1.1", "9.9.9.9", "8.8.8.8"):
+            if fallback != self.upstream_dns and fallback not in candidate_resolvers:
+                candidate_resolvers.append(fallback)
+
+        for resolver in candidate_resolvers:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(1.5)
+                sock.sendto(data, (resolver, self.upstream_port))
+                resp, _ = sock.recvfrom(4096)
+                if resp and len(resp) >= 12:
+                    return resp
+            except Exception:
+                continue
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+        return None
 
     async def _forward_upstream(self, data: bytes) -> Optional[bytes]:
         """
@@ -226,12 +242,59 @@ class DNSProxy:
     # NOTE: configure_system_dns() and restore_system_dns() should be called from
     # engine.py's start() and stop() methods to route system DNS traffic through this proxy.
 
+    def _save_dns_backup_to_disk(self):
+        """Persists original DNS configurations to disk so an unexpected reboot or crash can recover."""
+        try:
+            if self.original_dns_settings:
+                with open(DNS_BACKUP_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.original_dns_settings, f, indent=2)
+                print(f"[DNS] Persistent original DNS backup saved to {DNS_BACKUP_FILE}")
+        except Exception as e:
+            print(f"[DNS] Warning saving DNS backup to disk: {e}")
+
+    def _load_dns_backup_from_disk(self):
+        """Loads persistent original DNS backup from disk if available."""
+        if os.path.exists(DNS_BACKUP_FILE):
+            try:
+                with open(DNS_BACKUP_FILE, "r", encoding="utf-8") as f:
+                    self.original_dns_settings = json.load(f)
+                print(f"[DNS] Loaded original DNS backup from {DNS_BACKUP_FILE}")
+            except Exception as e:
+                print(f"[DNS] Error loading DNS backup from disk: {e}")
+
+    def _remove_dns_backup_from_disk(self):
+        """Removes persistent original DNS backup after clean restoration."""
+        if os.path.exists(DNS_BACKUP_FILE):
+            try:
+                os.remove(DNS_BACKUP_FILE)
+                print("[DNS] Cleaned up original DNS backup from disk.")
+            except Exception:
+                pass
+
+    def _flush_system_dns_cache(self):
+        """Flushes host operating system DNS cache."""
+        try:
+            if IS_WINDOWS:
+                subprocess.run(
+                    ["ipconfig", "/flushdns"],
+                    capture_output=True,
+                    timeout=4,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                )
+            elif IS_LINUX:
+                if shutil.which("resolvectl"):
+                    subprocess.run(["resolvectl", "flush-caches"], capture_output=True, timeout=3)
+                elif shutil.which("systemd-resolve"):
+                    subprocess.run(["systemd-resolve", "--flush-caches"], capture_output=True, timeout=3)
+            elif IS_MACOS:
+                subprocess.run(["dscacheutil", "-flushcache"], capture_output=True, timeout=3)
+                subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True, timeout=3)
+        except Exception:
+            pass
     def configure_system_dns(self) -> bool:
         """
         Configures the host operating system to route DNS queries to this proxy (127.0.0.1).
-        Stores original DNS settings for clean restoration when proxy stops.
-        
-        NOTE: engine.py needs to call this method in TrackerEngine.start().
+        Stores original DNS settings in RAM and persists to disk for emergency crash recovery.
         """
         if self.dns_configured:
             return True
@@ -252,6 +315,9 @@ class DNSProxy:
             else:
                 print(f"[DNS] System DNS automatic reconfiguration not implemented for {sys.platform}.")
 
+            # Save on-disk backup immediately for crash resilience
+            self._save_dns_backup_to_disk()
+
             self.dns_configured = True
             atexit.register(self.restore_system_dns)
             return True
@@ -259,19 +325,22 @@ class DNSProxy:
             print(f"[DNS] Failed to configure system DNS: {e}")
             return False
 
-    def restore_system_dns(self) -> bool:
+    def restore_system_dns(self, force_clean_all: bool = False) -> bool:
         """
         Restores host operating system DNS configuration to original pre-proxy settings.
-        
-        NOTE: engine.py needs to call this method in TrackerEngine.stop().
+        Capable of loading state from disk backup or performing an emergency DHCP reset.
         """
-        if not self.dns_configured and not self.original_dns_settings:
-            return True
+        if not self.dns_configured and not self.original_dns_settings and not force_clean_all:
+            if not os.path.exists(DNS_BACKUP_FILE):
+                return True
 
         print("[DNS] Restoring original system DNS configuration...")
+        if not self.original_dns_settings:
+            self._load_dns_backup_from_disk()
+
         try:
             if IS_WINDOWS:
-                self._restore_windows_dns()
+                self._restore_windows_dns(force_clean_all=force_clean_all)
             elif IS_LINUX:
                 self._restore_linux_dns()
             elif IS_MACOS:
@@ -279,14 +348,16 @@ class DNSProxy:
 
             self.dns_configured = False
             self.original_dns_settings.clear()
+            self._remove_dns_backup_from_disk()
+            self._flush_system_dns_cache()
             return True
         except Exception as e:
             print(f"[DNS] Failed to restore system DNS: {e}")
             return False
 
-    def restore_dns(self) -> bool:
+    def restore_dns(self, force_clean_all: bool = False) -> bool:
         """Alias for restore_system_dns."""
-        return self.restore_system_dns()
+        return self.restore_system_dns(force_clean_all=force_clean_all)
 
     def _get_active_windows_interfaces(self) -> List[str]:
         """Finds all active, connected network interfaces on Windows."""
@@ -393,9 +464,29 @@ class DNSProxy:
             except Exception as e:
                 print(f"[DNS] Error setting DNS on '{iface}': {e}")
 
-    def _restore_windows_dns(self):
+    def _restore_windows_dns(self, force_clean_all: bool = False):
         """Restores Windows network interfaces to their pre-proxy DNS configuration."""
         interfaces_data = self.original_dns_settings.get("interfaces", {})
+
+        # If forced or no backup data, scan all active interfaces to clear any residual 127.0.0.1
+        if not interfaces_data or force_clean_all:
+            for iface in self._get_active_windows_interfaces():
+                try:
+                    conf = self._get_windows_dns_config(iface)
+                    servers = conf.get("servers", [])
+                    if any("127.0.0.1" in s or "::1" in s for s in servers) or force_clean_all:
+                        subprocess.run(
+                            ["netsh", "interface", "ip", "set", "dns", iface, "dhcp"],
+                            capture_output=True,
+                            timeout=5,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                        )
+                        print(f"[DNS] Emergency reset of interface '{iface}' -> DHCP")
+                except Exception as e:
+                    print(f"[DNS] Error resetting interface '{iface}': {e}")
+            if not interfaces_data:
+                return
+
         for iface, original in interfaces_data.items():
             try:
                 is_dhcp = original.get("is_dhcp", True)

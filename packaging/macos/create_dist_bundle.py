@@ -161,7 +161,7 @@ for f in os.listdir(data_dir):
         app_files.append((f"data/{f}", os.path.join(data_dir, f)))
 
 # Create temporary app directory structure in memory/tar
-VERSION = os.environ.get("VERSION", "1.0.9").lstrip("v")
+VERSION = os.environ.get("VERSION", "1.1.0").lstrip("v")
 tar_path = os.path.join(DIST_MAC, f"TrackerControl-v{VERSION}-macOS-universal.tar.gz")
 zip_path = os.path.join(DIST_MAC, f"TrackerControl-v{VERSION}-macOS-universal.zip")
 

@@ -9,6 +9,7 @@ import os
 import urllib.request
 from typing import Dict, Any, List, Optional
 from .platform_helper import PlatformHelper
+from .credential_vault import vault
 
 DATA_DIR = PlatformHelper.get_data_dir()
 PROTON_AUTH_FILE = os.path.join(DATA_DIR, "proton_auth.json")
@@ -265,29 +266,59 @@ class ProtonService:
         if os.path.exists(PROTON_AUTH_FILE):
             try:
                 with open(PROTON_AUTH_FILE, "r", encoding="utf-8") as f:
-                    self.auth_data = json.load(f)
-            except Exception:
+                    data = json.load(f)
+                raw_key = data.get("private_key", "")
+                if raw_key:
+                    # Decrypt key via Hardware-backed CredentialVault
+                    decrypted_key = vault.decrypt(raw_key)
+                    # If loaded key was unencrypted plaintext (legacy), auto-migrate to encrypted-at-rest
+                    if not raw_key.startswith("ENC:v1:"):
+                        self.save_auth(
+                            private_key=decrypted_key,
+                            address=data.get("address", "10.2.0.2/32"),
+                            tier=data.get("tier", "Free"),
+                            username=data.get("username", "Proton User")
+                        )
+                    data["private_key"] = decrypted_key
+                self.auth_data = data
+            except Exception as e:
+                print(f"[ProtonService] Error loading auth: {e}")
                 self.auth_data = {}
 
     def save_auth(self, private_key: str, address: str = "10.2.0.2/32", tier: str = "Free", username: str = "") -> Dict[str, Any]:
-        """Saves Proton WireGuard credentials securely."""
+        """Saves Proton WireGuard credentials securely, encrypted at rest via CredentialVault."""
+        clean_key = private_key.strip()
         self.auth_data = {
-            "private_key": private_key.strip(),
+            "private_key": clean_key,
             "address": address.strip() or "10.2.0.2/32",
             "tier": tier.strip() or "Free",
             "username": username.strip() or "Proton User",
-            "configured": bool(private_key.strip())
+            "configured": bool(clean_key)
         }
+        
+        # Prepare encrypted payload for disk storage
+        disk_payload = dict(self.auth_data)
+        if clean_key:
+            disk_payload["private_key"] = vault.encrypt(clean_key)
+
         with open(PROTON_AUTH_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.auth_data, f, indent=2)
+            json.dump(disk_payload, f, indent=2)
+            
+        # Restrict OS-level read/write permissions to current user
+        vault.protect_file_permissions(PROTON_AUTH_FILE)
+
         return {"success": True, "configured": self.auth_data["configured"]}
 
     def get_auth_status(self) -> Dict[str, Any]:
+        v_status = vault.get_status()
         return {
             "configured": bool(self.auth_data.get("private_key")),
             "tier": self.auth_data.get("tier", "Free"),
             "username": self.auth_data.get("username", "Unconfigured"),
-            "address": self.auth_data.get("address", "10.2.0.2/32")
+            "address": self.auth_data.get("address", "10.2.0.2/32"),
+            "vault_protected": True,
+            "vault_provider": v_status.get("provider", "Hardware Encrypted"),
+            "is_hardware_backed": v_status.get("is_hardware_backed", False)
         }
 
     def get_servers(self, country: Optional[str] = None, tier: Optional[str] = None, search: Optional[str] = None) -> List[Dict[str, Any]]:

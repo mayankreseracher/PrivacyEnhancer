@@ -16,10 +16,11 @@ from typing import Optional, Dict, Any, List
 
 from .engine import TrackerEngine
 from .platform_helper import PlatformHelper
+from .credential_vault import vault
 
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
-app = FastAPI(title="TrackerControl PC", version="1.0.9")
+app = FastAPI(title="TrackerControl PC", version="1.1.0")
 
 # Enable CORS restricted to localhost & local dashboard for CSRF & RCE security
 app.add_middleware(
@@ -598,7 +599,7 @@ async def export_csv():
 async def get_updater_status():
     if hasattr(engine, "updater") and engine.updater:
         return engine.updater.get_status()
-    return {"status": "disabled", "current_version": "1.0.9"}
+    return {"status": "disabled", "current_version": "1.1.0"}
 
 @app.post("/api/updater/check")
 async def check_for_updates():
@@ -711,15 +712,30 @@ async def request_system_elevation():
 
     return {"success": False, "error": "Automatic elevation not supported on this platform. Please run with sudo."}
 
+@app.get("/api/system/vault-status")
+async def get_system_vault_status():
+    """Returns the active encryption-at-rest provider and status of CredentialVault."""
+    return vault.get_status()
+
+@app.post("/api/dns/restore-emergency")
+async def restore_dns_emergency():
+    """Restores host OS network interfaces to DHCP / default DNS immediately."""
+    try:
+        success = engine.dns_proxy.restore_system_dns(force_clean_all=True)
+        return {"success": success, "message": "System DNS reset to DHCP / default settings."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.get("/api/system/status")
 async def get_system_service_status():
     return {
         "status": "online",
-        "version": "1.0.9",
+        "version": "1.1.0",
         "persistent_background_mode": True,
         "shield_active": engine.shield_active,
         "protection_mode": engine.protection_mode,
         "active_tunnels": len([t for t in engine.wireguard.get_all_tunnels() if t.get("status") == "Connected"]),
+        "vault": vault.get_status(),
         "platform": PlatformHelper.get_system_summary()
     }
 

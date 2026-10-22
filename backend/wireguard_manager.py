@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional
 from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS, PlatformHelper
 from .socks5_gateway import MultiVpnProxyManager
 from .proton_service import VERIFIED_PROTON_SERVERS, ProtonService
+from .credential_vault import vault
 
 DATA_DIR = PlatformHelper.get_data_dir()
 CONFIGS_DIR = os.path.join(DATA_DIR, "wireguard_configs")
@@ -34,11 +35,24 @@ class WireGuardManager:
         self.load_state()
 
     def load_state(self):
+        migrated_any = False
         if os.path.exists(TUNNELS_FILE):
             try:
                 with open(TUNNELS_FILE, "r", encoding="utf-8") as f:
-                    self.tunnels = json.load(f)
-            except Exception:
+                    raw_tunnels = json.load(f)
+                decrypted_tunnels = {}
+                for tid, tun in raw_tunnels.items():
+                    t_copy = dict(tun)
+                    raw_pk = t_copy.get("private_key")
+                    if raw_pk:
+                        decrypted_pk = vault.decrypt(raw_pk)
+                        if not raw_pk.startswith("ENC:v1:"):
+                            migrated_any = True
+                        t_copy["private_key"] = decrypted_pk
+                    decrypted_tunnels[tid] = t_copy
+                self.tunnels = decrypted_tunnels
+            except Exception as e:
+                print(f"[WireGuardManager] Error loading tunnels: {e}")
                 self.tunnels = {}
 
         if os.path.exists(APP_BINDINGS_FILE):
@@ -48,13 +62,27 @@ class WireGuardManager:
             except Exception:
                 self.app_bindings = {}
 
+        if migrated_any:
+            self.save_state()
+
         self._detect_system_vpn_interfaces()
 
     def save_state(self):
+        # Prepare encrypted copy of tunnels for disk storage
+        disk_tunnels = {}
+        for tid, tun in self.tunnels.items():
+            t_copy = dict(tun)
+            if t_copy.get("private_key"):
+                t_copy["private_key"] = vault.encrypt(t_copy["private_key"])
+            disk_tunnels[tid] = t_copy
+
         with open(TUNNELS_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.tunnels, f, indent=2)
+            json.dump(disk_tunnels, f, indent=2)
         with open(APP_BINDINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(self.app_bindings, f, indent=2)
+
+        vault.protect_file_permissions(TUNNELS_FILE)
+        vault.protect_file_permissions(APP_BINDINGS_FILE)
 
     def _detect_system_vpn_interfaces(self):
         """Auto-detects live WireGuard / ProtonVPN / Tun network interfaces on Linux and Windows."""
@@ -180,6 +208,10 @@ class WireGuardManager:
 
             assigned = [app for app, bind_id in self.app_bindings.items() if bind_id == tid]
             t_copy["assigned_apps"] = assigned
+            # Secure against credential exposure over REST/WebSocket
+            t_copy.pop("private_key", None)
+            t_copy["has_private_key"] = bool(t.get("private_key"))
+            t_copy["vault_protected"] = True
             result.append(t_copy)
 
         return result
@@ -217,6 +249,7 @@ PersistentKeepalive = 25
 
         with open(conf_path, "w", encoding="utf-8") as f:
             f.write(conf_content)
+        vault.protect_file_permissions(conf_path)
 
         tunnel_record = {
             "id": tunnel_id,

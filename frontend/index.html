@@ -24,7 +24,7 @@
         <span id="hostOsBadge" style="background: rgba(0, 229, 255, 0.12); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--accent-glow); font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; font-weight: 600;">🖥️ OS: Detecting...</span>
         <button class="update-pill-btn" id="updatePillBtn" onclick="openUpdateModal()" title="System Updates & Version" aria-label="System Updates">
           <span class="update-pill-dot" id="updatePillDot"></span>
-          <span id="updatePillText">v1.0.9</span>
+          <span id="updatePillText">v1.1.0</span>
         </button>
         <span id="bgSvcBadge" title="Continuous Background Service: Closing window keeps DNS & Multi-VPN tunnels running (Click to configure)" style="background: rgba(0, 255, 157, 0.12); border: 1px solid rgba(0, 255, 157, 0.3); color: #00ff9d; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openBackgroundServiceModal()">🟢 Svc Active ⚙️</span>
         <span class="live-pulse" id="enginePulse"></span>
@@ -903,7 +903,7 @@
             <div class="update-version-split">
               <div class="version-box">
                 <span class="version-label">Current Version</span>
-                <span class="version-value" id="updateCurrentVersion">v1.0.9</span>
+                <span class="version-value" id="updateCurrentVersion">v1.1.0</span>
               </div>
               <div class="version-arrow">➔</div>
               <div class="version-box">
@@ -1038,6 +1038,29 @@
                 <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Clicking 'X' hides the dashboard to the system tray rather than killing protection. Use Tray Menu to exit completely.</div>
               </div>
               <span class="badge badge-allowed" style="font-size: 0.72rem; padding: 3px 8px; flex-shrink: 0;">Active</span>
+            </div>
+          </div>
+
+          <!-- Hardware Credential Vault & Emergency Recovery Card -->
+          <div class="glass-panel" style="padding: 14px 18px; background: rgba(0, 229, 255, 0.04); border-color: rgba(0, 229, 255, 0.25);">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+              <div>
+                <div style="font-weight: 700; color: #fff; font-size: 0.88rem; display: flex; align-items: center; gap: 6px;">
+                  <span>🔐 Hardware Credential Vault</span>
+                  <span class="badge badge-functional" style="font-size: 0.7rem; padding: 2px 6px;" id="vaultProviderStatus">Encrypted at Rest</span>
+                </div>
+                <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 3px;">
+                  Proton VPN private keys & WireGuard tunnel credentials are encrypted at rest with zero plaintext keys stored on disk.
+                </div>
+              </div>
+            </div>
+            <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; justify-content: space-between;">
+              <div style="font-size: 0.74rem; color: var(--text-muted);">
+                DNS fail-safe watchdog & persistent crash recovery.
+              </div>
+              <button class="btn-action" onclick="emergencyRestoreDNS()" style="background: rgba(255, 68, 68, 0.2); border: 1px solid rgba(255, 68, 68, 0.5); color: #ff6b6b; font-size: 0.75rem; padding: 4px 10px; border-radius: 4px; font-weight: 600; cursor: pointer;">
+                🚨 Restore System DNS
+              </button>
             </div>
           </div>
 

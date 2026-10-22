@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Optional, Tuple, Callable
 
 from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS, PlatformHelper
 
-CURRENT_VERSION = "1.0.9"
+CURRENT_VERSION = "1.1.0"
 GITHUB_REPO = "mayankreseracher/PrivacyEnhancer"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 ALL_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"

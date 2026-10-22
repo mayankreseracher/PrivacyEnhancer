@@ -3122,6 +3122,7 @@ window.openBackgroundServiceModal = function() {
   if (modal) {
     modal.classList.add("active");
     loadAutostartStatus();
+    fetchVaultStatus();
   }
 };
 
@@ -3179,5 +3180,38 @@ window.toggleDesktopNotifications = async function(enabled) {
     showToast("Notifications", enabled ? "Desktop threat alerts enabled." : "Desktop threat alerts paused.", "info");
   } catch (e) {
     showToast("Notifications Error", e.message || "Failed to update notification settings", "error");
+  }
+};
+
+window.fetchVaultStatus = async function() {
+  try {
+    const res = await fetch(`${API_BASE}/api/system/vault-status`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const vaultEl = document.getElementById("vaultProviderStatus");
+    if (vaultEl && data.provider) {
+      vaultEl.textContent = data.is_hardware_backed ? "Hardware DPAPI" : "Machine-Bound Vault";
+      vaultEl.title = `${data.provider} (${data.algorithm})`;
+    }
+  } catch (e) {
+    console.warn("Could not load vault status:", e);
+  }
+};
+
+window.emergencyRestoreDNS = async function() {
+  const proceed = confirm("Emergency DNS Restoration:\n\nReset all host network adapters back to default DHCP / OS resolvers and flush the DNS cache now?");
+  if (!proceed) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/dns/restore-emergency`, {
+      method: "POST"
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("DNS Restored", "All network interfaces successfully reset to DHCP / OS resolvers.", "shield");
+    } else {
+      showToast("DNS Warning", data.error || "Could not automatically restore DNS.", "warn");
+    }
+  } catch (e) {
+    showToast("DNS Error", e.message || "Failed to trigger emergency DNS restore", "error");
   }
 };

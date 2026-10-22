@@ -25,9 +25,17 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
+# Distribution / Packaging / Binaries
+dist/
 build/
-dist/TrackerControl-PC/
+*.exe
+*.deb
+*.rpm
+*.dmg
+*.AppImage
+*.bin
+*.tar.gz
+*.zip
 *.manifest
 *.spec.bak
 trackercontrol-linux.spec
@@ -76,8 +84,11 @@ desktop.ini
 *.sqlite3
 data/trackercontrol.db*
 
-# Personal Runtime VPN & Auth Secrets
+# Personal Runtime VPN, DNS Backups & Auth Secrets
 data/proton_auth.json
+data/wireguard_tunnels.json
+data/original_dns_backup.json
+data/credential_vault_salt.bin
 data/wireguard_configs/*.conf
 !data/wireguard_configs/.gitkeep
 data/tor_data/
