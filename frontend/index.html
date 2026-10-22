@@ -31,6 +31,13 @@
         <span style="font-size: 0.8rem; font-weight: 700; color: #00ff9d;" id="engineStatus">RADAR ONLINE</span>
       </div>
 
+      <!-- Administrator Privilege Badge -->
+      <div id="elevationBadgeContainer" style="display: flex; align-items: center; margin-left: 8px;">
+        <span class="badge" id="elevationStatusBadge" style="cursor: pointer; font-size: 0.72rem; padding: 4px 8px;" onclick="requestAdminElevation()" title="Click to grant full Administrator privileges">
+          🛡️ Checking Privileges...
+        </span>
+      </div>
+
       <select class="mode-select" id="shieldModeSelect">
         <option value="MAX_PRIVACY">🛡️ Maximum Privacy (Strict)</option>
         <option value="BALANCED">⚖️ Balanced Shield</option>
@@ -54,6 +61,20 @@
 
   <!-- Main Container -->
   <main>
+
+    <!-- Admin Privilege Banner (Displays only when running unprivileged) -->
+    <div id="elevationNoticeBanner" class="glass-panel" style="display: none; margin-bottom: 16px; padding: 12px 18px; border: 1px solid rgba(255, 170, 0, 0.4); background: rgba(255, 170, 0, 0.08); border-radius: 8px; align-items: center; justify-content: space-between; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 1.3rem;">⚠️</span>
+        <div>
+          <div style="font-weight: 700; color: #ffaa00; font-size: 0.88rem;">Running in Unprivileged Audit Mode</div>
+          <div style="font-size: 0.76rem; color: var(--text-muted);">Active kernel firewall blocking (netsh), DNS sinkholing (port 53), P2P port forwarding, and full system app control require Administrator privileges.</div>
+        </div>
+      </div>
+      <button class="btn-action" onclick="requestAdminElevation()" style="white-space: nowrap; font-size: 0.78rem; font-weight: 700; background: rgba(255, 170, 0, 0.2); border-color: #ffaa00; color: #fff;">
+        🛡️ Grant Administrator Privileges
+      </button>
+    </div>
 
     <!-- Telemetry Metric Row -->
     <div class="telemetry-grid">

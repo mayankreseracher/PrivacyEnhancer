@@ -29,10 +29,11 @@ from backend.platform_helper import PlatformHelper
 _cleaned_up = False
 
 
-def check_elevation() -> bool:
+def check_elevation(auto_elevate: bool = True) -> bool:
     """
     Checks if TrackerControl PC is running with administrative or root privileges.
-    Warns the user if unprivileged without blocking or auto-elevating.
+    If unprivileged on Windows and not in explicit --audit mode, requests UAC elevation.
+    Returns True if running with admin / root privileges, False otherwise.
     """
     is_admin = False
     try:
@@ -44,15 +45,50 @@ def check_elevation() -> bool:
     except Exception:
         is_admin = False
 
-    if not is_admin:
-        print("\n" + "=" * 72)
-        print(" [!] WARNING: Running without Administrative / Root Privileges!")
-        print(" [!] Firewall rules and DNS interception require admin/root privileges.")
-        print(" [!] TrackerControl PC will run in AUDIT-ONLY mode.")
-        print(" [!] To enable active blocking and system hardening, restart as Admin/root.")
-        print("=" * 72 + "\n")
+    if is_admin:
+        return True
 
-    return is_admin
+    # Check for explicit flags requesting unprivileged mode
+    if not auto_elevate or any(arg in sys.argv for arg in ("--audit", "--no-elevate")) or os.environ.get("TRACKERCONTROL_NO_ELEVATE") == "1":
+        print("\n" + "=" * 72)
+        print(" [!] NOTICE: Running in Unprivileged Audit Mode.")
+        print(" [!] Active firewall blocking and DNS interception require Administrator privileges.")
+        print(" [!] To enable full system privilege, restart as Administrator.")
+        print("=" * 72 + "\n")
+        return False
+
+    # Auto-elevate on Windows
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            print("\n" + "=" * 72)
+            print(" [*] TrackerControl PC requires Administrator privileges for:")
+            print("     - Full application firewall blocking (netsh advfirewall)")
+            print("     - System DNS sinkhole on port 53")
+            print("     - Multi-VPN split-tunneling & P2P port forwarding")
+            print("     - OS telemetry neutralizer")
+            print(" [*] Requesting Windows UAC elevation...")
+            print("=" * 72 + "\n")
+
+            args = " ".join([f'"{a}"' for a in sys.argv[1:]])
+            if getattr(sys, "frozen", False):
+                hinstance = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", sys.executable, args, None, 1
+                )
+            else:
+                hinstance = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", sys.executable, f'"{sys.argv[0]}" {args}'.strip(), None, 1
+                )
+
+            if int(hinstance) > 32:
+                # Successfully launched elevated process!
+                sys.exit(0)
+            else:
+                print(f"[!] UAC prompt declined (code {hinstance}). Continuing in Audit Mode.\n")
+        except Exception as e:
+            print(f"[!] Error during UAC elevation request: {e}\n")
+
+    return False
 
 
 def print_banner():

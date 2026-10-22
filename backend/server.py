@@ -4,6 +4,7 @@ Provides real-time WebSockets and endpoints for the Cyber-Dark Dashboard.
 """
 
 import os
+import sys
 import csv
 import io
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
@@ -612,6 +613,56 @@ async def update_updater_settings(payload: UpdaterSettingsRequest):
     return {"success": False, "error": "Updater not initialized"}
 
 # ==================== System & Background Service Endpoints ====================
+
+@app.get("/api/system/elevation")
+async def get_system_elevation():
+    is_admin = False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            is_admin = False
+    elif hasattr(os, "geteuid"):
+        is_admin = (os.geteuid() == 0)
+    return {
+        "is_admin": is_admin,
+        "platform": sys.platform,
+        "mode": "full_privilege" if is_admin else "audit_only"
+    }
+
+@app.post("/api/system/elevate")
+async def request_system_elevation():
+    """Requests OS-level Administrator / root elevation."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            if ctypes.windll.shell32.IsUserAnAdmin():
+                return {"success": True, "already_elevated": True, "message": "TrackerControl is already running with full Administrator privileges."}
+
+            args = " ".join([f'"{a}"' for a in sys.argv[1:]])
+            if getattr(sys, "frozen", False):
+                hinstance = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", sys.executable, args, None, 1
+                )
+            else:
+                hinstance = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", sys.executable, f'"{sys.argv[0]}" {args}'.strip(), None, 1
+                )
+
+            if int(hinstance) > 32:
+                import asyncio
+                async def _exit():
+                    await asyncio.sleep(1.0)
+                    os._exit(0)
+                asyncio.create_task(_exit())
+                return {"success": True, "message": "Administrator elevation prompt initiated. Relaunching with full privileges..."}
+            else:
+                return {"success": False, "error": f"UAC prompt was cancelled or declined (code {hinstance})."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    return {"success": False, "error": "Automatic elevation not supported on this platform. Please run with sudo."}
 
 @app.get("/api/system/status")
 async def get_system_service_status():

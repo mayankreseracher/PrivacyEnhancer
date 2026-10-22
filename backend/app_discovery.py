@@ -267,6 +267,97 @@ class AppDiscovery:
                 pass
         return discovered
 
+    def scan_program_files(self) -> List[Dict[str, Any]]:
+        """Discovers installed software and standalone executables in Program Files."""
+        if not IS_WINDOWS:
+            return []
+
+        apps = []
+        seen_proc = set()
+        pf_roots = [
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        ]
+        skip_patterns = ["unins", "update", "helper", "crash", "vcredist", "dxsetup", "redist", "setup", "install"]
+
+        for root_dir in pf_roots:
+            if not root_dir or not os.path.isdir(root_dir):
+                continue
+            try:
+                for entry in os.listdir(root_dir):
+                    sub = os.path.join(root_dir, entry)
+                    if not os.path.isdir(sub) or entry.lower() in ("common files", "windows defender", "windows mail", "windows nt"):
+                        continue
+                    for dirpath, _, filenames in os.walk(sub):
+                        depth = dirpath[len(sub):].count(os.sep)
+                        if depth > 2:
+                            continue
+                        for f in filenames:
+                            if f.lower().endswith(".exe") and not any(p in f.lower() for p in skip_patterns):
+                                f_lower = f.lower()
+                                if f_lower in seen_proc:
+                                    continue
+                                seen_proc.add(f_lower)
+                                full_path = os.path.join(dirpath, f)
+                                clean_name = os.path.splitext(f)[0].replace("-", " ").replace("_", " ").title()
+                                cat = guess_app_category(clean_name, f)
+                                apps.append({
+                                    "name": clean_name,
+                                    "process_name": f,
+                                    "exe_path": full_path,
+                                    "publisher": entry.title(),
+                                    "version": "",
+                                    "category": cat,
+                                    "icon": get_category_icon(cat),
+                                    "source": "program_files"
+                                })
+            except Exception:
+                pass
+        return apps
+
+    def scan_start_menu_shortcuts(self) -> List[Dict[str, Any]]:
+        """Discovers installed Windows Start Menu applications and games."""
+        if not IS_WINDOWS:
+            return []
+
+        apps = []
+        seen = set()
+        sm_dirs = [
+            os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), r"Microsoft\Windows\Start Menu\Programs"),
+            os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs")
+        ]
+        skip_words = ["uninstall", "help", "readme", "documentation", "website", "support"]
+
+        for base in sm_dirs:
+            if not base or not os.path.isdir(base):
+                continue
+            try:
+                for root, _, files in os.walk(base):
+                    for f in files:
+                        if f.lower().endswith(".lnk"):
+                            raw_name = f[:-4].strip()
+                            if any(w in raw_name.lower() for w in skip_words):
+                                continue
+                            f_key = raw_name.lower()
+                            if f_key in seen:
+                                continue
+                            seen.add(f_key)
+                            proc_guess = raw_name.lower().replace(" ", "") + ".exe"
+                            cat = guess_app_category(raw_name, proc_guess)
+                            apps.append({
+                                "name": raw_name,
+                                "process_name": proc_guess,
+                                "exe_path": os.path.join(root, f),
+                                "publisher": "Start Menu Application",
+                                "version": "",
+                                "category": cat,
+                                "icon": get_category_icon(cat),
+                                "source": "start_menu"
+                            })
+            except Exception:
+                pass
+        return apps
+
     # ==================== macOS Application Discovery ====================
 
     def scan_macos_apps(self) -> List[Dict[str, Any]]:
@@ -438,6 +529,18 @@ class AppDiscovery:
                     all_apps[key]["publisher"] = app["publisher"]
                     if app.get("version"):
                         all_apps[key]["version"] = app["version"]
+
+            for app in self.scan_program_files():
+                key = app["process_name"].lower()
+                if key not in all_apps:
+                    app["is_running"] = False
+                    all_apps[key] = app
+
+            for app in self.scan_start_menu_shortcuts():
+                key = app["process_name"].lower()
+                if key not in all_apps:
+                    app["is_running"] = False
+                    all_apps[key] = app
 
         # 4. macOS .app bundles if on macOS
         if IS_MACOS or (not IS_WINDOWS and not IS_LINUX and os.path.exists("/Applications")):

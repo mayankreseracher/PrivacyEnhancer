@@ -1361,6 +1361,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadRules();
   loadOsInfoAndPrivacy();
   loadVpnState();
+  loadElevationStatus();
 
   // Tab Switching
   document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -3035,3 +3036,53 @@ window.downloadUpdate = downloadUpdate;
 window.applyUpdate = applyUpdate;
 window.toggleAutoCheckUpdates = toggleAutoCheckUpdates;
 
+
+
+// ==================== Administrator Elevation Management ====================
+async function loadElevationStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/api/system/elevation`);
+    const data = await res.json();
+    const badge = document.getElementById("elevationStatusBadge");
+    const banner = document.getElementById("elevationNoticeBanner");
+
+    if (data.is_admin) {
+      if (badge) {
+        badge.textContent = "🛡️ Full Admin Privileges";
+        badge.className = "badge badge-allowed";
+        badge.style.background = "rgba(0, 255, 157, 0.15)";
+        badge.style.color = "#00ff9d";
+        badge.style.border = "1px solid rgba(0, 255, 157, 0.3)";
+        badge.title = "TrackerControl PC has full Administrator privilege for firewall blocking and Multi-VPN control.";
+      }
+      if (banner) banner.style.display = "none";
+    } else {
+      if (badge) {
+        badge.textContent = "⚠️ Audit Only (Click to Elevate)";
+        badge.className = "badge badge-blocked";
+        badge.style.background = "rgba(255, 170, 0, 0.2)";
+        badge.style.color = "#ffaa00";
+        badge.style.border = "1px solid rgba(255, 170, 0, 0.4)";
+        badge.title = "Click to grant Administrator privileges for active packet blocking.";
+      }
+      if (banner) banner.style.display = "flex";
+    }
+  } catch (e) {
+    console.error("Error checking elevation:", e);
+  }
+}
+
+window.requestAdminElevation = async function() {
+  try {
+    showToast("Requesting Elevation", "Launching Windows UAC administrator prompt...", "info");
+    const res = await fetch(`${API_BASE}/api/system/elevate`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      showToast("Elevation Granted", data.message || "Relaunching with full privileges...", "success");
+    } else {
+      showToast("Elevation Notice", data.error || "UAC prompt was cancelled.", "warn");
+    }
+  } catch (err) {
+    showToast("Elevation Error", "Could not request elevation: " + err, "error");
+  }
+};
