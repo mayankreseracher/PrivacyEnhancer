@@ -224,6 +224,14 @@ PrivacyEnhancer/
 
 ---
 
+## 📬 Contact & Inquiries
+
+For questions, feedback, contributions, or security reports:
+- **Email**: [tiger.sasquatch115@passinbox.com](mailto:tiger.sasquatch115@passinbox.com)
+- **Security Policy & Disclosures**: See [SECURITY.md](SECURITY.md)
+
+---
+
 ## 📜 License
 
 This project is licensed under the [MIT License](LICENSE) — see the [LICENSE](LICENSE) file for details.

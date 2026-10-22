@@ -10,7 +10,7 @@ We welcome reports from security researchers, penetration testers, and the open-
 
 ### Reporting Channel
 - **GitHub Private Vulnerability Reporting**: [Open a Security Advisory](https://github.com/mayankreseracher/PrivacyEnhancer/security/advisories/new)
-- **Security Team Email**: `security@trackercontrol.org`
+- **Security Contact Email**: `tiger.sasquatch115@passinbox.com`
 
 ### Response SLAs
 - **Acknowledgment**: Within 48 hours.
