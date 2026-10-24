@@ -51,9 +51,17 @@ class DNSProxy:
         self.domain_to_ip_cache: Dict[str, str] = {}
         self.original_dns_settings: Dict[str, Any] = {}
         self.dns_configured: bool = False
+        self.protection_mode: str = "MAX_PRIVACY"
+        self.shield_active: bool = True
 
         # Optional ProcessMonitor reference for DNS client attribution (set by engine)
         self.process_monitor = None
+
+    def set_protection_mode(self, mode: str):
+        self.protection_mode = mode
+
+    def toggle_shield(self, active: bool):
+        self.shield_active = active
 
     def get_domain_for_ip(self, ip: str) -> Optional[str]:
         return self.ip_to_domain_cache.get(ip)
@@ -85,8 +93,6 @@ class DNSProxy:
                         elif r["action"] == "allow":
                             custom_allow = True
 
-            should_block = (is_tracker or custom_block) and not custom_allow
-
             # Attempt to attribute DNS request to originating process via ProcessMonitor
             pid = None
             process_name = "DNS Client"
@@ -107,6 +113,28 @@ class DNSProxy:
                 pid = None
                 process_name = "DNS Client"
                 exe_path = ""
+
+            # Guest / Audit Mode & Shield Active check
+            is_audit_mode = (self.protection_mode in ("AUDIT", "AUDIT_ONLY") or not self.shield_active)
+
+            # Check per-application policy if process is attributed
+            app_policy = None
+            if process_name and process_name != "DNS Client":
+                try:
+                    app_policy = self.database.get_app_mode(exe_path, process_name)
+                    if isinstance(app_policy, dict):
+                        app_policy = app_policy.get("control_mode")
+                except Exception:
+                    pass
+
+            if app_policy == "allow_all":
+                should_block = False
+            elif app_policy == "block_all":
+                should_block = not is_audit_mode
+            elif app_policy == "audit":
+                should_block = False
+            else:
+                should_block = (is_tracker or custom_block) and not custom_allow and not is_audit_mode
 
             # If blocked: generate sinkhole response (0.0.0.0 / ::) or NXDOMAIN
             if should_block:
@@ -154,6 +182,29 @@ class DNSProxy:
                     self.event_callback(event)
 
                 return reply.pack()
+
+            # If threat detected in Audit / Guest mode, log audit event without blocking
+            if not should_block and (is_tracker or custom_block):
+                audit_event = {
+                    "timestamp": time.time(),
+                    "pid": pid,
+                    "process_name": process_name,
+                    "exe_path": exe_path,
+                    "domain": qname,
+                    "ip": "Audit",
+                    "port": 53,
+                    "protocol": "DNS",
+                    "category": threat.get("category", "Advertising"),
+                    "company": threat.get("company", "Unknown"),
+                    "risk": threat.get("risk", "Medium"),
+                    "status": "audit",
+                    "block_reason": "Audit Mode (Monitoring Only)",
+                    "country": threat.get("country", "US"),
+                    "flag": threat.get("flag", "👁️")
+                }
+                self.database.log_connection(audit_event)
+                if self.event_callback:
+                    self.event_callback(audit_event)
 
             # Otherwise, forward upstream asynchronously (Bug 1 fix)
             upstream_response = await self._forward_upstream(data)

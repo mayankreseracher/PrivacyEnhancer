@@ -17,16 +17,26 @@ DATA_DIR = PlatformHelper.get_data_dir()
 TRACKERS_FILE = os.path.join(DATA_DIR, "trackers.json")
 COMPANIES_FILE = os.path.join(DATA_DIR, "companies.json")
 
-# Heuristic patterns for detecting novel trackers
+# Heuristic patterns for detecting novel trackers and advertising networks
 TRACKER_KEYWORDS = [
+    # Windows OS Telemetry & Diagnostics
     (re.compile(r"(^|\.)(telemetry|diagtrack|vortex|watson)[\.-]", re.I), "Windows Telemetry", "Microsoft Corporation", "High"),
-    (re.compile(r"(^|\.)(analytics|analysis|analytic)[\.-]", re.I), "Analytics", "Third-Party Analytics", "Medium"),
-    (re.compile(r"(^|\.)(telemetry|metrics|stats|usage)[\.-]", re.I), "Telemetry", "App Telemetry", "Medium"),
-    (re.compile(r"(^|\.)(doubleclick|adservice|adserver|pagead|googlesyndication)[\.-]", re.I), "Advertising", "Alphabet Inc.", "High"),
-    (re.compile(r"(^|\.)(pixel|beacon|tracker|tracking|collector|snoop)[\.-]", re.I), "Fingerprinting", "Tracking Network", "High"),
-    (re.compile(r"(^|\.)(crashlytics|bugsnag|sentry|raygun)[\.-]", re.I), "Analytics", "Diagnostics / Crash Reporter", "Low"),
-    (re.compile(r"(^|\.)(criteo|taboola|outbrain|applovin|unityads|vungle)[\.-]", re.I), "Advertising", "Ad Exchange", "High"),
-    (re.compile(r"(^|\.)(segment|mixpanel|amplitude|branch|appsflyer|adjust)[\.-]", re.I), "Analytics", "Cross-App Tracking", "High"),
+    # General Web & App Analytics
+    (re.compile(r"(^|\.)(analytics|analysis|analytic|statcounter|hotjar|crazyegg|fullstory|mouseflow|inspectlet)[\.-]", re.I), "Analytics", "Third-Party Analytics", "Medium"),
+    # Performance, Metrics, Health Tracking
+    (re.compile(r"(^|\.)(telemetry|metrics|stats|usage|counter|beacon|collector|snoop)[\.-]", re.I), "Telemetry", "App Telemetry", "Medium"),
+    # Google Advertising, AdSense & DoubleClick
+    (re.compile(r"(^|\.)(doubleclick|adservice|adserver|pagead|googlesyndication|googleadservices|googleads)[\.-]", re.I), "Advertising", "Alphabet Inc.", "High"),
+    # Ad Exchanges, Programmatic Ad Networks, Video Ads
+    (re.compile(r"(^|\.)(criteo|taboola|outbrain|applovin|unityads|vungle|adcolony|ironsrc|adnxs|pubmatic|rubiconproject|openx|smartadserver|media\.net|triplelift|casalemedia|bidswitch|moatads|serving-sys|doubleverify|flashtalking|zemanta|teads|sovrn|yieldmo|indexexchange|sharethrough|magnite|thetradedesk)[\.-]", re.I), "Advertising", "Ad Exchange", "High"),
+    # General Ad Server subdomains & keywords
+    (re.compile(r"(^|\.)(ad|ads|adserver|adservice|advert|advertising|banner|banners|popads|propellerads|admob)[\.-]", re.I), "Advertising", "Ad Network", "High"),
+    # Mobile Attribution & Cross-App Profilers
+    (re.compile(r"(^|\.)(segment|mixpanel|amplitude|branch|appsflyer|adjust|singular|kochava|braze|onesignal|airship|iterable|klaviyo)[\.-]", re.I), "Analytics", "Cross-App Tracking", "High"),
+    # Crash Reporting & Diagnostics
+    (re.compile(r"(^|\.)(crashlytics|bugsnag|sentry|raygun|rollbar)[\.-]", re.I), "Analytics", "Diagnostics / Crash Reporter", "Low"),
+    # Tracking Pixels & Canvas / Device Fingerprinting
+    (re.compile(r"(^|\.)(pixel|fingerprint|supercookie|audiencemanager|demdex|scorecardresearch)[\.-]", re.I), "Fingerprinting", "Audience Profiler", "High"),
 ]
 
 # Offline IP/ASN Corporation mapping for direct IP connections

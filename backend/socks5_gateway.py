@@ -145,8 +145,24 @@ class Socks5RelayServer:
                             client_writer.close()
                             return
                     
+                    # Resolve domain name to numeric IP before connecting on bound socket
+                    connect_ip = dest_host
+                    try:
+                        socket.inet_aton(dest_host)
+                    except socket.error:
+                        try:
+                            addr_infos = await loop.getaddrinfo(dest_host, dest_port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+                            if addr_infos and len(addr_infos) > 0:
+                                connect_ip = addr_infos[0][4][0]
+                        except Exception as resolve_err:
+                            print(f"[Socks5Gateway] DNS resolution failed for {dest_host}: {resolve_err}")
+                            client_writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
+                            await client_writer.drain()
+                            client_writer.close()
+                            return
+                    
                     await asyncio.wait_for(
-                        loop.sock_connect(sock, (dest_host, dest_port)),
+                        loop.sock_connect(sock, (connect_ip, dest_port)),
                         timeout=10.0
                     )
                     remote_reader, remote_writer = await asyncio.open_connection(sock=sock)

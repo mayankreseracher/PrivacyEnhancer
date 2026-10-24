@@ -301,6 +301,8 @@ class TrackerEngine:
                 self.monitor.set_protection_mode(mode)
             elif hasattr(self, "process_monitor") and self.process_monitor:
                 self.process_monitor.set_protection_mode(mode)
+            if hasattr(self, "dns_proxy") and self.dns_proxy:
+                self.dns_proxy.set_protection_mode(mode)
 
     def toggle_shield(self, active: bool):
         self.shield_active = active
@@ -308,6 +310,8 @@ class TrackerEngine:
             self.monitor.set_shield_active(active)
         elif hasattr(self, "process_monitor") and self.process_monitor:
             self.process_monitor.set_shield_active(active)
+        if hasattr(self, "dns_proxy") and self.dns_proxy:
+            self.dns_proxy.toggle_shield(active)
 
     def toggle_kill_switch(self, active: bool) -> Dict[str, Any]:
         self.kill_switch_active = active

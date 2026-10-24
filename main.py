@@ -32,35 +32,64 @@ _cleaned_up = False
 _instance_mutex = None
 _lock_file = None
 
-def acquire_single_instance_lock() -> bool:
+def acquire_single_instance_lock(retries: int = 5, retry_delay: float = 0.5) -> bool:
     """
     Enforces OS-level single instance application lifecycle.
     On Windows: Uses named Win32 Mutex.
     On Linux/macOS: Uses non-blocking file lock.
+    Retries briefly if another instance is currently transferring execution / shutting down.
     Returns True if this is the primary instance, False if already running.
     """
     global _instance_mutex, _lock_file
-    if sys.platform == "win32":
+    for attempt in range(retries):
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ERROR_ALREADY_EXISTS = 183
+                _instance_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, r"Global\TrackerControlPC_SingleInstance_Mutex_v1")
+                last_err = ctypes.windll.kernel32.GetLastError()
+                if last_err != ERROR_ALREADY_EXISTS:
+                    return True
+                # If already held, release local handle and retry briefly before giving up
+                if _instance_mutex:
+                    ctypes.windll.kernel32.CloseHandle(_instance_mutex)
+                    _instance_mutex = None
+                if attempt < retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return False
+            except Exception:
+                return True
+        else:
+            try:
+                import fcntl
+                lock_dir = PlatformHelper.get_data_dir()
+                lock_path = os.path.join(lock_dir, "trackercontrol.lock")
+                _lock_file = open(lock_path, "w")
+                fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except Exception:
+                if attempt < retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return False
+    return False
+
+def release_single_instance_lock():
+    global _instance_mutex, _lock_file
+    if sys.platform == "win32" and _instance_mutex:
         try:
             import ctypes
-            ERROR_ALREADY_EXISTS = 183
-            _instance_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, r"Global\TrackerControlPC_SingleInstance_Mutex_v1")
-            last_err = ctypes.windll.kernel32.GetLastError()
-            if last_err == ERROR_ALREADY_EXISTS:
-                return False
-            return True
+            ctypes.windll.kernel32.CloseHandle(_instance_mutex)
+            _instance_mutex = None
         except Exception:
-            return True
-    else:
+            pass
+    if _lock_file:
         try:
-            import fcntl
-            lock_dir = PlatformHelper.get_data_dir()
-            lock_path = os.path.join(lock_dir, "trackercontrol.lock")
-            _lock_file = open(lock_path, "w")
-            fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
+            _lock_file.close()
+            _lock_file = None
         except Exception:
-            return False
+            pass
 
 def wake_existing_instance():
     """Notifies already-running TrackerControl instance to bring native window to front."""
@@ -217,6 +246,7 @@ def cleanup():
     except Exception as e:
         print(f"[!] Cleanup exception: {e}")
 
+    release_single_instance_lock()
     print("[+] Cleanup complete.")
 
 

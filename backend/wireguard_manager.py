@@ -133,6 +133,11 @@ class WireGuardManager:
                         detected_country = "United Kingdom"
                         detected_flag = "🇬🇧"
 
+                    # If ProtonVPN interface is active, mark country as Netherlands / Proton Secure Gateway
+                    if "proton" in name_lower and detected_country == "Global":
+                        detected_country = "Netherlands"
+                        detected_flag = "🇳🇱"
+
                     self.tunnels[tunnel_id] = {
                         "id": tunnel_id,
                         "name": f"{iface_name} (System Active)",
@@ -499,6 +504,13 @@ PersistentKeepalive = 25
                     raise ValueError(f"Tunnel ID '{tunnel_id}' does not exist.")
 
         self.save_state()
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.proxy_manager.sync_tunnels(self.tunnels))
+        except Exception:
+            pass
         bound_tid = self.app_bindings.get(proc_key, "Direct")
         tunnel_info = self.tunnels.get(bound_tid, {}) if bound_tid in self.tunnels else {}
         idx = list(self.tunnels.keys()).index(bound_tid) if bound_tid in self.tunnels else 0

@@ -2176,14 +2176,34 @@ function renderAppRoutingMatrix() {
   const tunnels = state.vpnTunnels || [];
   const bindings = state.appBindings || {};
 
-  // Build app list: registered apps + detected apps if empty
-  let appList = state.apps && state.apps.length > 0 ? [...state.apps] : [
+  // Build comprehensive app list: active traffic apps + bound apps + popular desktop software
+  const appMap = new Map();
+  if (state.apps && state.apps.length > 0) {
+    state.apps.forEach(a => {
+      if (a.process_name) appMap.set(a.process_name.toLowerCase(), a);
+    });
+  }
+  Object.keys(bindings).forEach(procKey => {
+    if (!appMap.has(procKey)) {
+      appMap.set(procKey, { name: procKey, process_name: procKey, exe_path: "Configured Tunnel Rule" });
+    }
+  });
+  const defaults = [
     { name: "Brave Browser", process_name: "brave.exe", exe_path: "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe" },
     { name: "Google Chrome", process_name: "chrome.exe", exe_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
-    { name: "Steam Client", process_name: "steam.exe", exe_path: "C:\\Program Files (x86)\\Steam\\steam.exe" },
+    { name: "Mozilla Firefox", process_name: "firefox.exe", exe_path: "C:\\Program Files\\Mozilla Firefox\\firefox.exe" },
+    { name: "Microsoft Edge", process_name: "msedge.exe", exe_path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" },
+    { name: "qBittorrent (P2P)", process_name: "qbittorrent.exe", exe_path: "C:\\Program Files\\qBittorrent\\qbittorrent.exe" },
+    { name: "Telegram Desktop", process_name: "Telegram.exe", exe_path: "%AppData%\\Telegram Desktop\\Telegram.exe" },
     { name: "Discord", process_name: "Discord.exe", exe_path: "%LocalAppData%\\Discord\\app.exe" },
-    { name: "qBittorrent", process_name: "qbittorrent.exe", exe_path: "C:\\Program Files\\qBittorrent\\qbittorrent.exe" }
+    { name: "Steam Client", process_name: "steam.exe", exe_path: "C:\\Program Files (x86)\\Steam\\steam.exe" }
   ];
+  defaults.forEach(d => {
+    if (!appMap.has(d.process_name.toLowerCase())) {
+      appMap.set(d.process_name.toLowerCase(), d);
+    }
+  });
+  let appList = Array.from(appMap.values());
 
   appList.forEach(app => {
     const tr = document.createElement("tr");
