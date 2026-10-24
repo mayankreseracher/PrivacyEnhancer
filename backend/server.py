@@ -419,7 +419,12 @@ async def launch_app_with_vpn(payload: LaunchAppVpnRequest):
 
     cmd = [exe_path]
     env = os.environ.copy()
-    if proxy_url:
+    if tunnel_id in ("exclude", "bypass"):
+        cmd.append("--no-proxy-server")
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
+            env.pop(k, None)
+        proxy_url = None
+    elif proxy_url:
         cmd.append(f"--proxy-server={proxy_url}")
         # Inject standard proxy environment variables so non-Chromium apps can inherit tunnel routing
         env["HTTP_PROXY"] = proxy_url
@@ -431,15 +436,34 @@ async def launch_app_with_vpn(payload: LaunchAppVpnRequest):
 
     try:
         proc = subprocess.Popen(cmd, env=env)
+        tunnel_display = "Excluded from VPN (Bypass)" if tunnel_id in ("exclude", "bypass") else (tunnel_info.get("name") if tunnel_info else ("Orbot / Tor" if tunnel_id == "orbot" else "Direct"))
         return {
             "success": True,
             "pid": proc.pid,
             "app": payload.process_name,
-            "tunnel": tunnel_info.get("name") if tunnel_info else ("Orbot / Tor" if tunnel_id == "orbot" else "Direct"),
+            "tunnel": tunnel_display,
+            "is_excluded": tunnel_id in ("exclude", "bypass"),
             "proxy_url": proxy_url
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+class ExcludeAppRequest(BaseModel):
+    process_name: str
+    excluded: bool = True
+
+@app.post("/api/vpn/exclude-app")
+async def toggle_exclude_app_vpn(payload: ExcludeAppRequest):
+    """Explicitly excludes or includes an application from active VPN routing."""
+    tid = "exclude" if payload.excluded else "direct"
+    return engine.wireguard.bind_app_to_tunnel(payload.process_name, tid)
+
+@app.get("/api/vpn/excluded-apps")
+async def get_excluded_vpn_apps():
+    """Returns list of applications configured to bypass VPN."""
+    bindings = engine.wireguard.get_all_bindings()
+    excluded = [app for app, info in bindings.items() if info.get("is_excluded") or info.get("tunnel_id") == "exclude"]
+    return {"excluded_apps": excluded}
 
 # ==================== Orbot VPN Endpoints ====================
 
@@ -556,7 +580,11 @@ class SplitTunnelConfigRequest(BaseModel):
 
 @app.post("/api/vpn/split-tunneling")
 async def set_split_tunneling(payload: SplitTunnelConfigRequest):
-    if payload.mode == "tunnel":
+    if payload.mode == "exclude" or payload.tunnel_id in ("exclude", "bypass"):
+        engine.wireguard.bind_app_to_tunnel(payload.process_name, "exclude")
+        engine.database.set_app_mode(payload.process_name, "allow_all")
+        engine.firewall.unblock_executable(payload.process_name)
+    elif payload.mode == "tunnel":
         engine.wireguard.bind_app_to_tunnel(payload.process_name, payload.tunnel_id)
         engine.database.set_app_mode(payload.process_name, "block_trackers")
         engine.firewall.unblock_executable(payload.process_name)

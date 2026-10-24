@@ -463,14 +463,49 @@ PersistentKeepalive = 25
         except Exception:
             pass
 
+    def _apply_linux_exclude_rule(self, process_name: str):
+        """Routes excluded app packets via Linux main table (bypassing VPN routing)."""
+        if not IS_LINUX:
+            return
+        mark = 0x200 + (abs(hash(process_name)) % 200)
+        table_id = 254 # Main clearnet routing table
+        try:
+            subprocess.run(["ip", "rule", "add", "fwmark", str(mark), "table", str(table_id), "priority", "100"], capture_output=True)
+            subprocess.run(["iptables", "-t", "mangle", "-A", "OUTPUT", "-m", "owner", "--cmd-owner", process_name, "-m", "comment", "--comment", f"TC_Exclude_{process_name}", "-j", "MARK", "--set-mark", str(mark)], capture_output=True)
+        except Exception:
+            pass
+
+    def _remove_linux_exclude_rule(self, process_name: str):
+        if not IS_LINUX:
+            return
+        try:
+            res = subprocess.run(["iptables", "-t", "mangle", "-S", "OUTPUT"], capture_output=True, text=True)
+            for line in res.stdout.splitlines():
+                if f"TC_Exclude_{process_name}" in line:
+                    rule_spec = line.replace("-A OUTPUT ", "").strip().split()
+                    subprocess.run(["iptables", "-t", "mangle", "-D", "OUTPUT"] + rule_spec, capture_output=True)
+        except Exception:
+            pass
+
+    def is_app_excluded(self, process_name: str) -> bool:
+        """Returns True if application is explicitly excluded from VPN tunnels."""
+        proc_key = process_name.lower().strip()
+        return self.app_bindings.get(proc_key) in ("exclude", "bypass")
+
     def bind_app_to_tunnel(self, process_name: str, tunnel_id: Optional[str]) -> Dict[str, Any]:
-        """Binds a specific application executable to a WireGuard tunnel for split-tunneling."""
+        """Binds an application to a specific WireGuard tunnel or explicitly excludes it from VPN."""
         proc_key = process_name.lower().strip()
         if not tunnel_id or tunnel_id in ("none", "direct", "clearnet"):
             if proc_key in self.app_bindings:
                 del self.app_bindings[proc_key]
                 self._remove_linux_split_rule(proc_key)
+                self._remove_linux_exclude_rule(proc_key)
+        elif tunnel_id in ("exclude", "bypass"):
+            self.app_bindings[proc_key] = "exclude"
+            self._remove_linux_split_rule(proc_key)
+            self._apply_linux_exclude_rule(proc_key)
         else:
+            self._remove_linux_exclude_rule(proc_key)
             if tunnel_id in self.tunnels or tunnel_id == "orbot":
                 self.app_bindings[proc_key] = tunnel_id
                 self._apply_linux_split_rule(proc_key, tunnel_id)
@@ -512,6 +547,20 @@ PersistentKeepalive = 25
         except Exception:
             pass
         bound_tid = self.app_bindings.get(proc_key, "Direct")
+        if bound_tid in ("exclude", "bypass"):
+            return {
+                "success": True,
+                "app": process_name,
+                "bound_tunnel": "exclude",
+                "tunnel_name": "Excluded from VPN (Bypass Tunnel)",
+                "country": "Direct Clearnet",
+                "flag": "🚫",
+                "is_excluded": True,
+                "proxy_url": None,
+                "proxy_port": None,
+                "launch_command": f'"{process_name}" --no-proxy-server'
+            }
+
         tunnel_info = self.tunnels.get(bound_tid, {}) if bound_tid in self.tunnels else {}
         idx = list(self.tunnels.keys()).index(bound_tid) if bound_tid in self.tunnels else 0
         assigned_port = tunnel_info.get("proxy_port", 1081 + idx)
@@ -524,6 +573,7 @@ PersistentKeepalive = 25
             "tunnel_name": tunnel_info.get("name", "Direct Clearnet" if bound_tid == "Direct" else "Orbot / Tor"),
             "country": tunnel_info.get("country", "Local"),
             "flag": tunnel_info.get("flag", "🌐" if bound_tid == "Direct" else "🧅"),
+            "is_excluded": False,
             "proxy_url": proxy_url,
             "proxy_port": assigned_port if bound_tid in self.tunnels else (9050 if bound_tid == "orbot" else None),
             "launch_command": f'"{process_name}" --proxy-server="{proxy_url}"' if proxy_url else None
@@ -533,7 +583,18 @@ PersistentKeepalive = 25
         """Returns map of process_name -> bound tunnel details."""
         result = {}
         for proc_name, tid in self.app_bindings.items():
-            if tid in self.tunnels:
+            if tid in ("exclude", "bypass"):
+                result[proc_name] = {
+                    "tunnel_id": "exclude",
+                    "name": "Excluded from VPN (Bypass Tunnel)",
+                    "country": "Direct Clearnet",
+                    "flag": "🚫",
+                    "is_excluded": True,
+                    "proxy_url": None,
+                    "proxy_port": None,
+                    "status": "Excluded"
+                }
+            elif tid in self.tunnels:
                 t = self.tunnels[tid]
                 idx = list(self.tunnels.keys()).index(tid)
                 assigned_port = t.get("proxy_port", 1081 + idx)

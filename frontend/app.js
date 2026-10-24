@@ -970,6 +970,12 @@ function renderAppMatrix() {
             🚫 Firewall App
           </button>
         </div>
+        <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px;">
+          <span style="font-size: 0.72rem; color: var(--text-muted);">VPN Route:</span>
+          <button class="btn-action" style="padding: 3px 8px; font-size: 0.72rem; ${(state.appBindings && state.appBindings[app.process_name.toLowerCase().trim()] && state.appBindings[app.process_name.toLowerCase().trim()].tunnel_id === 'exclude') ? 'background: rgba(255,75,75,0.2); border: 1px solid rgba(255,75,75,0.4); color: #ff6b6b;' : 'background: rgba(255,255,255,0.05);'}" onclick="toggleAppVpnExclusion('${escapeHtml(app.process_name)}')">
+            ${(state.appBindings && state.appBindings[app.process_name.toLowerCase().trim()] && state.appBindings[app.process_name.toLowerCase().trim()].tunnel_id === 'exclude') ? '🚫 Excluded from VPN' : '⚡ Exclude from VPN'}
+          </button>
+        </div>
       </div>
     `;
     container.appendChild(card);
@@ -2213,6 +2219,7 @@ function renderAppRoutingMatrix() {
 
     // Options for tunnels
     let tunnelOptions = `<option value="direct" ${boundTid === "direct" ? "selected" : ""}>🌐 Direct Clearnet (Shield Protected)</option>`;
+    tunnelOptions += `<option value="exclude" ${boundTid === "exclude" ? "selected" : ""}>🚫 Exclude from VPN (Bypass Tunnel)</option>`;
     tunnelOptions += `<option value="orbot" ${boundTid === "orbot" ? "selected" : ""}>🧅 Orbot / Tor Onion Network (SOCKS5 9050)</option>`;
     tunnels.forEach(t => {
       const isSel = boundTid === t.id ? "selected" : "";
@@ -2223,7 +2230,16 @@ function renderAppRoutingMatrix() {
     let statusBadge = `<span class="badge" style="background: rgba(255,255,255,0.06); color: var(--text-muted);">Direct Shield</span>`;
     let launchBtn = "";
 
-    if (boundTid && boundTid !== "direct") {
+    if (boundTid === "exclude") {
+      statusBadge = `<span class="badge" style="background: rgba(255,75,75,0.15); color: #ff6b6b; border: 1px solid rgba(255,75,75,0.3);">
+        🚫 Excluded from VPN (Bypass)
+      </span>`;
+      const encProc = encodeURIComponent(app.process_name || "");
+      const encExe = encodeURIComponent(app.exe_path || "");
+      launchBtn = `<button class="btn-action" style="padding: 3px 8px; font-size: 0.72rem; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; background: rgba(255,75,75,0.15); border-color: rgba(255,75,75,0.3);" onclick="launchAppWithVpn(decodeURIComponent('${encProc}'), decodeURIComponent('${encExe}'), 'exclude')">
+        <span>🌐</span> Launch Direct (No VPN)
+      </button>`;
+    } else if (boundTid && boundTid !== "direct") {
       const flag = binding ? (binding.flag || "🔒") : "🔒";
       const tname = binding ? binding.name : "Active Tunnel";
       statusBadge = `<span class="badge badge-allowed" style="background: rgba(0,255,157,0.15); color: #00ff9d; border: 1px solid rgba(0,255,157,0.3);">
@@ -2273,6 +2289,9 @@ async function setAppRouting(processName, routeChoice) {
   if (routeChoice === "orbot") {
     mode = "orbot";
     tunnelId = "orbot";
+  } else if (routeChoice === "exclude" || routeChoice === "bypass") {
+    mode = "exclude";
+    tunnelId = "exclude";
   } else if (routeChoice !== "direct" && routeChoice !== "clearnet") {
     mode = "tunnel";
     tunnelId = routeChoice;
@@ -2289,7 +2308,17 @@ async function setAppRouting(processName, routeChoice) {
     // Update local state bindings
     if (!state.appBindings) state.appBindings = {};
     const procKey = processName.toLowerCase().trim();
-    if (tunnelId && tunnelId !== "direct") {
+    if (tunnelId === "exclude") {
+      state.appBindings[procKey] = {
+        tunnel_id: "exclude",
+        name: "Excluded from VPN (Bypass)",
+        country: "Direct Clearnet",
+        flag: "🚫",
+        is_excluded: true,
+        proxy_url: null
+      };
+      showToast("VPN Excluded", `${processName} excluded from VPN tunnel. Traffic will route directly via ISP.`, "warn");
+    } else if (tunnelId && tunnelId !== "direct") {
       const t = (state.vpnTunnels || []).find(x => x.id === tunnelId);
       state.appBindings[procKey] = {
         tunnel_id: tunnelId,
@@ -2309,6 +2338,15 @@ async function setAppRouting(processName, routeChoice) {
     console.error("Error setting app routing:", err);
   }
 }
+window.toggleAppVpnExclusion = async function(processName) {
+  const procKey = processName.toLowerCase().trim();
+  const currentlyExcluded = state.appBindings && state.appBindings[procKey] && state.appBindings[procKey].tunnel_id === "exclude";
+  const nextChoice = currentlyExcluded ? "direct" : "exclude";
+  await setAppRouting(processName, nextChoice);
+  renderAppMatrix();
+  renderAppRoutingMatrix();
+};
+
 
 async function launchAppWithVpn(processName, exePath, tunnelId) {
   try {
@@ -2418,6 +2456,13 @@ async function applyVpnPreset(presetName) {
     } else {
       showToast("Preset Notice", "Deploy 'NL-FREE#1' from the server fleet below.", "info");
     }
+  } else if (presetName === "exclude_gaming") {
+    const gamingApps = ["steam.exe", "epicgameslauncher.exe", "valorant.exe", "bgmi.exe", "game.exe", "leagueclient.exe", "robloxplayerbeta.exe"];
+    for (const p of gamingApps) {
+      await setAppRouting(p, "exclude");
+    }
+    renderAppMatrix();
+    showToast("Preset Applied", "Gaming apps excluded from VPN for lowest latency & ping.", "info");
   } else if (presetName === "reset_direct") {
     const appsToReset = state.apps ? state.apps.map(a => a.process_name) : ["brave.exe", "steam.exe", "qbittorrent.exe"];
     for (const p of appsToReset) {
