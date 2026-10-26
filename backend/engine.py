@@ -8,7 +8,7 @@ import asyncio
 import json
 import time
 import psutil
-from typing import Dict, Any, List, Set, Optional
+from typing import Dict, Any, List, Set, Optional, Callable
 from fastapi import WebSocket
 
 from .database import Database
@@ -46,6 +46,7 @@ class TrackerEngine:
         self.protection_mode = "MAX_PRIVACY" # MAX_PRIVACY, BALANCED, AUDIT_ONLY, LOCKDOWN
         self.shield_active = True
         self.active_websockets: Set[WebSocket] = set()
+        self.event_listeners: List[Callable[[Dict[str, Any]], None]] = []
         self.recent_events_cache: List[Dict[str, Any]] = []
         self.max_cache_size = 100
 
@@ -89,8 +90,8 @@ class TrackerEngine:
         self._monitor_task = None
 
     def _dispatch_coro(self, coro):
-        """Thread-safe coroutine scheduler for WebSocket broadcasts across background threads."""
-        if not self.active_websockets:
+        """Thread-safe coroutine scheduler for WebSocket & in-process desktop broadcasts."""
+        if not self.active_websockets and not getattr(self, "event_listeners", None):
             try:
                 coro.close()
             except Exception:
@@ -211,16 +212,37 @@ class TrackerEngine:
 
         self._dispatch_coro(self.broadcast_message(event))
 
+    def add_event_listener(self, listener: Callable[[Dict[str, Any]], None]):
+        """Registers an in-process listener for native desktop GUI telemetry."""
+        if not hasattr(self, "event_listeners"):
+            self.event_listeners = []
+        if listener not in self.event_listeners:
+            self.event_listeners.append(listener)
+
+    def remove_event_listener(self, listener: Callable[[Dict[str, Any]], None]):
+        if hasattr(self, "event_listeners") and listener in self.event_listeners:
+            self.event_listeners.remove(listener)
+
     async def broadcast_message(self, message_dict: Dict[str, Any]):
-        dead_sockets = set()
-        message = json.dumps(message_dict)
-        for ws in list(self.active_websockets):
-            try:
-                await ws.send_text(message)
-            except Exception:
-                dead_sockets.add(ws)
-        for ws in dead_sockets:
-            self.active_websockets.discard(ws)
+        # 1. Native Desktop GUI event listeners (Zero-localhost in-memory IPC)
+        if hasattr(self, "event_listeners"):
+            for listener in list(self.event_listeners):
+                try:
+                    listener(message_dict)
+                except Exception:
+                    pass
+
+        # 2. WebSocket clients (for headless/browser fallback mode)
+        if self.active_websockets:
+            dead_sockets = set()
+            message = json.dumps(message_dict)
+            for ws in list(self.active_websockets):
+                try:
+                    await ws.send_text(message)
+                except Exception:
+                    dead_sockets.add(ws)
+            for ws in dead_sockets:
+                self.active_websockets.discard(ws)
 
     async def broadcast_event(self, event: Dict[str, Any]):
         await self.broadcast_message({"type": "NEW_CONNECTION", "data": event})
@@ -265,7 +287,7 @@ class TrackerEngine:
                 if len(self.bandwidth_history) > self.max_bandwidth_history:
                     self.bandwidth_history.pop(0)
 
-                if self.active_websockets:
+                if self.active_websockets or getattr(self, "event_listeners", None):
                     await self.broadcast_message({"type": "BANDWIDTH_TICK", "data": point})
             except asyncio.CancelledError:
                 break

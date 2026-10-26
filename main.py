@@ -92,22 +92,12 @@ def release_single_instance_lock():
             pass
 
 def wake_existing_instance():
-    """Notifies already-running TrackerControl instance to bring native window to front."""
+    """Notifies already-running TrackerControl instance via local Named Pipe/Domain Socket IPC."""
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            "http://127.0.0.1:8000/api/system/show",
-            data=b"{}",
-            headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=1.5):
-            pass
+        from backend.desktop_ipc import send_ipc_message
+        return send_ipc_message({"action": "show"})
     except Exception:
-        try:
-            import webbrowser
-            webbrowser.open("http://127.0.0.1:8000")
-        except Exception:
-            pass
+        return False
 
 
 def check_elevation(auto_elevate: bool = True) -> bool:
@@ -170,7 +160,7 @@ def print_banner():
 ========================================================================
   [+] Host Platform:       {os_name}
   [+] Firewall Engine:     {firewall}
-  [+] Web Dashboard:       http://localhost:8000
+  [+] GUI Architecture:    Native GlassWire-Style Desktop UI (Zero-Localhost)
   [+] Process Monitor:     Active (Continuous Real-Time Socket Interception)
   [+] Threat Intelligence: 4,500+ Signatures Loaded (Exodus, Disconnect, SpyBlocker)
   [+] Protection Mode:     MAX_PRIVACY (Strict)
@@ -282,42 +272,95 @@ def _unhandled_exception_handler(exc_type, exc_value, exc_traceback):
 sys.excepthook = _unhandled_exception_handler
 
 
+import asyncio
+
+def _start_engine_background(engine):
+    """Starts the TrackerControl engine inside an asyncio background thread."""
+    if hasattr(engine, "_started") and engine._started:
+        return
+    engine._started = True
+
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        engine.loop = loop
+        try:
+            loop.run_until_complete(engine.start())
+            loop.run_forever()
+        except Exception as e:
+            print(f"[Engine] Exception in engine loop: {e}")
+        finally:
+            try:
+                loop.run_until_complete(engine.stop())
+            except Exception:
+                pass
+            loop.close()
+
+    t = threading.Thread(target=run_loop, daemon=True, name="EngineLoopThread")
+    t.start()
+
+    # Wait briefly for engine.loop to initialize
+    start_t = time.time()
+    while (engine.loop is None or not engine.loop.is_running()) and time.time() - start_t < 4.0:
+        time.sleep(0.05)
+
+
 def run_service_mode():
     """
-    Continuous background service mode (ideal for Windows Service, systemd, or launchd).
-    Runs FastAPI server, DNS sinkhole, Firewall, and WireGuard tunnels without opening a GUI window.
+    Continuous background service mode (GlassWire-Standard Architecture).
+    Runs DNS sinkhole, Firewall, and WireGuard tunnels without opening a GUI window.
+    Zero localhost HTTP server is started.
     """
-    from backend.server import app, engine
+    from backend.server import engine
     from backend.tray_service import TrayService
+    from backend.desktop_ipc import DesktopIPCServer
 
     print("[+] Starting TrackerControl PC in Sovereign Background Service mode...")
-    tray = TrayService(engine=engine, on_open_dashboard=lambda: webbrowser.open("http://127.0.0.1:8000"), on_quit=cleanup)
+
+    # Start engine in background thread
+    _start_engine_background(engine)
+
+    def on_ipc_message(msg):
+        if msg.get("action") == "show":
+            print("[+] IPC Wakeup received in service mode.")
+        elif msg.get("action") == "quit":
+            cleanup()
+            sys.exit(0)
+
+    ipc_server = DesktopIPCServer(on_ipc_message)
+    ipc_server.start()
+
+    tray = TrayService(engine=engine, on_open_dashboard=lambda tab=None: None, on_quit=cleanup)
     engine.set_tray(tray)
     tray.start()
 
-    bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+    print("[+] Background Service running with active DNS sinkhole and firewall. Zero localhost ports listening.")
+
     try:
-        uvicorn.run(app, host=bind_host, port=8000, log_level="warning")
+        while not _cleaned_up:
+            time.sleep(1)
     except (KeyboardInterrupt, SystemExit):
         cleanup()
 
 
 def run_browser_mode(server_started: bool = False, existing_tray=None):
     """
-    Fallback / command-line browser mode:
-    Starts uvicorn normally and opens dashboard in the default web browser with persistent tray.
+    Explicit fallback / command-line browser mode (only when --browser is passed).
+    Starts uvicorn and opens dashboard in the web browser.
     """
     import webbrowser
     from backend.server import app, engine
     from backend.tray_service import TrayService
 
+    _start_engine_background(engine)
+
     url = "http://127.0.0.1:8000"
-    print(f"\n[+] TrackerControl Web Dashboard available at {url}")
+    print(f"\n[!] Headless / Browser Fallback Mode: Web Dashboard available at {url}")
 
     if existing_tray:
         tray = existing_tray
     else:
-        tray = TrayService(engine=engine, on_open_dashboard=lambda: webbrowser.open(url), on_quit=cleanup)
+        tray = TrayService(engine=engine, on_open_dashboard=lambda tab=None: webbrowser.open(url), on_quit=cleanup)
         tray.start()
     engine.set_tray(tray)
 
@@ -342,8 +385,10 @@ def run_browser_mode(server_started: bool = False, existing_tray=None):
 
 def run_native_window():
     """
-    Native desktop application mode using pywebview.
-    Runs FastAPI server in a background daemon thread, then launches pywebview native window.
+    Native desktop application mode using pywebview (GlassWire-Standard Architecture).
+    Runs the engine in background, initializes DesktopBridge (in-process ASGI IPC),
+    and launches the pywebview native window directly loading frontend/index.html (file://).
+    ZERO localhost or TCP ports are opened for the UI.
     When the window is closed, TrackerControl continues running in the background as a sovereign
     privacy service with system tray access.
     """
@@ -355,39 +400,30 @@ def run_native_window():
         return
 
     from backend.server import app, engine
+    from backend.desktop_bridge import DesktopBridge
+    from backend.desktop_ipc import DesktopIPCServer
     from backend.tray_service import TrayService
-    import webbrowser
 
-    def start_server():
-        bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
-        uvicorn.run(app, host=bind_host, port=8000, log_level="warning")
+    # 1. Start engine event loop in background thread (Zero-localhost)
+    _start_engine_background(engine)
 
-    # Start FastAPI server in background thread
-    server_thread = threading.Thread(target=start_server, daemon=True)
-    server_thread.start()
-
-    # Wait for server to bind port 8000 (up to 5s)
-    import socket
-    start_t = time.time()
-    while time.time() - start_t < 5.0:
-        try:
-            with socket.create_connection(("127.0.0.1", 8000), timeout=0.2):
-                break
-        except Exception:
-            time.sleep(0.1)
+    # 2. Initialize in-process DesktopBridge (handles API & telemetry in-memory)
+    bridge = DesktopBridge(app, engine)
 
     force_quit = False
     window = None
 
-    def open_dashboard():
+    def open_dashboard(tab=None):
+        nonlocal window
         if window:
             try:
                 window.show()
                 window.restore()
+                if tab:
+                    window.evaluate_js(f"if (window.switchTab) window.switchTab('{tab}');")
                 return
             except Exception:
                 pass
-        webbrowser.open("http://127.0.0.1:8000")
 
     def quit_app():
         nonlocal force_quit
@@ -399,7 +435,18 @@ def run_native_window():
                 pass
         cleanup()
 
-    # Initialize System Tray Sentry
+    # 3. Start Native Single-Instance IPC listener (Named Pipe / Domain Socket)
+    def on_ipc_message(msg):
+        action = msg.get("action")
+        if action == "show":
+            open_dashboard(msg.get("tab"))
+        elif action == "quit":
+            quit_app()
+
+    ipc_server = DesktopIPCServer(on_ipc_message)
+    ipc_server.start()
+
+    # 4. Initialize System Tray Sentry
     tray = TrayService(
         engine=engine,
         on_open_dashboard=open_dashboard,
@@ -408,17 +455,23 @@ def run_native_window():
     engine.set_tray(tray)
     tray.start()
 
+    # 5. Build canonical local file URL for frontend/index.html (file://)
+    frontend_html = os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend", "index.html"))
+    file_url = "file:///" + frontend_html.replace("\\", "/")
+
     try:
-        # Create native desktop window
+        # Create native desktop window with in-process JS API bridge
         window = webview.create_window(
             'TrackerControl PC — Sovereign Edition',
-            'http://127.0.0.1:8000',
+            url=file_url,
+            js_api=bridge,
             width=1400,
             height=900,
             min_size=(1024, 700),
             confirm_close=False,
             text_select=True
         )
+        bridge.set_window(window)
 
         def on_closing():
             nonlocal force_quit
@@ -432,18 +485,21 @@ def run_native_window():
             return True
 
         window.events.closing += on_closing
-        webview.start(debug=False)
+
+        print("[+] Launching Native Desktop GUI window (file:// protocol, Zero-localhost)...")
+        # Start pywebview GUI loop with http_server=False (ZERO localhost server!)
+        webview.start(http_server=False, debug=False)
 
         # When pywebview native window is closed or hidden, keep background service active until explicit quit
         print("\n[+] Desktop window closed. TrackerControl PC continues running in background service mode.")
         print("[+] System DNS filtering, Firewall rules, and Multi-VPN split tunneling remain 100% active.")
-        print("[+] Click the system tray icon or visit http://127.0.0.1:8000 to reopen the dashboard.")
+        print("[+] Click the system tray icon to reopen the dashboard.")
 
         while not _cleaned_up and not force_quit:
             time.sleep(1)
     except Exception as e:
         print(f"[!] pywebview encountered error ({e}). Falling back to browser mode.")
-        run_browser_mode(server_started=True, existing_tray=tray)
+        run_browser_mode(server_started=False, existing_tray=tray)
 
 
 def main():

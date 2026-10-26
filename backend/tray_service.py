@@ -144,12 +144,20 @@ class TrayService:
             try:
                 self.on_open_dashboard()
                 return
-            except Exception:
-                pass
-        webbrowser.open("http://127.0.0.1:8000")
+            except Exception as e:
+                print(f"[TrayService] Error restoring native window: {e}")
+                return
+        print("[TrayService] Notice: GUI window not available.")
 
     def _action_open_vpn(self, icon=None, item=None):
-        webbrowser.open("http://127.0.0.1:8000/#vpnTab")
+        if self.on_open_dashboard:
+            try:
+                self.on_open_dashboard("vpnTab")
+                return
+            except Exception as e:
+                print(f"[TrayService] Error restoring native window: {e}")
+                return
+        print("[TrayService] Notice: GUI window not available.")
 
     def _action_toggle_shield(self, icon=None, item=None):
         if self.engine:

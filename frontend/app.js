@@ -3,10 +3,62 @@
  * WebSocket streaming, app privacy matrix, and Windows OS debloater.
  */
 
-// Base API configuration for REST and WebSockets
-const API_BASE = (window.location.protocol === "file:" || !window.location.host) 
-  ? "http://127.0.0.1:8000" 
-  : "";
+// ==================== Native Desktop IPC Bridge (GlassWire Standard) ====================
+// TrackerControl operates as an industrial-standard desktop software.
+// In native GUI mode, it communicates in-process via window.pywebview.api.
+// Zero TCP ports are opened on localhost or 127.0.0.1.
+const isNativeDesktop = Boolean(window.pywebview || window.location.protocol === "file:");
+const API_BASE = "";
+
+// Transparent In-Memory Fetch Interceptor for Native Desktop GUI
+const _originalFetch = window.fetch;
+window.fetch = async function(resource, init = {}) {
+  // If running in native desktop GUI, route /api/ directly via PyWebView in-process ASGI
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.call_api) {
+    const rawUrl = typeof resource === "string" ? resource : (resource.url || "");
+    let path = rawUrl;
+
+    // Strip any localhost/127.0.0.1 prefix if present
+    if (path.startsWith("http://127.0.0.1") || path.startsWith("http://localhost")) {
+      try {
+        const u = new URL(path);
+        path = u.pathname + u.search;
+      } catch (e) {}
+    }
+
+    if (path.startsWith("/api/") || path.startsWith("api/") || path.startsWith("/health")) {
+      const method = (init.method || "GET").toUpperCase();
+      let body = init.body;
+      if (typeof body === "string") {
+        try { body = JSON.parse(body); } catch (e) {}
+      }
+
+      try {
+        const res = await window.pywebview.api.call_api(method, path, body);
+        const status = (res && typeof res.status === "number") ? res.status : 200;
+        const resData = res ? res.data : null;
+        return {
+          ok: status >= 200 && status < 300,
+          status: status,
+          statusText: status === 200 ? "OK" : "Error",
+          json: async () => resData,
+          text: async () => typeof resData === "string" ? resData : JSON.stringify(resData)
+        };
+      } catch (err) {
+        console.error(`[DesktopBridge] IPC error executing ${method} ${path}:`, err);
+        return {
+          ok: false,
+          status: 500,
+          statusText: "IPC Error",
+          json: async () => ({ success: false, error: String(err) }),
+          text: async () => String(err)
+        };
+      }
+    }
+  }
+
+  return _originalFetch.apply(this, arguments);
+};
 
 let wsReconnectTimeout = null;
 let wsAttemptCount = 0;
@@ -233,6 +285,13 @@ function startWsHeartbeat() {
 }
 
 function initWebSocket() {
+  // If running in native desktop mode (Zero-localhost via PyWebView IPC), bypass TCP WebSocket
+  if (window.pywebview && window.pywebview.api) {
+    console.log("[DesktopBridge] Zero-localhost native desktop mode active. WebSockets bypassed.");
+    ensureRadarStatusOnline();
+    return;
+  }
+
   if (wsReconnectTimeout) {
     clearTimeout(wsReconnectTimeout);
     wsReconnectTimeout = null;
@@ -264,18 +323,17 @@ function initWebSocket() {
     } catch (e) {}
   };
 
-  state.ws.onmessage = (event) => {
-    wsLastMessageTime = Date.now();
-    ensureRadarStatusOnline();
+  // Unified Event Processor (shared by WebSockets and Native In-Memory Desktop IPC)
+  window.handleEngineEvent = function(msg) {
+    if (!msg || !msg.type) return;
     try {
-      const msg = JSON.parse(event.data);
       if (msg.type === "PONG") {
         wsLastMessageTime = Date.now();
         ensureRadarStatusOnline();
         return;
       }
       if (msg.type === "INIT_STATE") {
-        updateStats(msg.data.stats);
+        if (msg.data.stats) updateStats(msg.data.stats);
         if (msg.data.recent_connections) {
           state.connections = msg.data.recent_connections;
           renderWaterfall();
@@ -329,6 +387,24 @@ function initWebSocket() {
         handleUpdateStatus(msg.data);
       }
     } catch (err) {
+      console.error("[EngineEvent] Error processing telemetry event:", err);
+    }
+  };
+
+  // Exposed for native in-memory Desktop Bridge event dispatch
+  window.__onDesktopEvent = function(msg) {
+    wsLastMessageTime = Date.now();
+    ensureRadarStatusOnline();
+    window.handleEngineEvent(msg);
+  };
+
+  state.ws.onmessage = (event) => {
+    wsLastMessageTime = Date.now();
+    ensureRadarStatusOnline();
+    try {
+      const msg = JSON.parse(event.data);
+      window.handleEngineEvent(msg);
+    } catch (err) {
       console.error("WS Parse error:", err);
     }
   };
@@ -354,6 +430,10 @@ function initWebSocket() {
 }
 
 function startFallbackPoller() {
+  // In native desktop mode, events are streamed in-process via DesktopBridge
+  if (window.pywebview && window.pywebview.api) {
+    return;
+  }
   if (window._fallbackPoller) return;
   window._fallbackPoller = setInterval(async () => {
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
@@ -3296,3 +3376,19 @@ window.emergencyRestoreDNS = async function() {
     showToast("DNS Error", e.message || "Failed to trigger emergency DNS restore", "error");
   }
 };
+
+// ==================== Native Desktop Initialization Lifecycle ====================
+window.addEventListener("pywebviewready", async () => {
+  console.log("[DesktopBridge] Native PyWebView API ready. Zero-localhost in-memory IPC active.");
+  ensureRadarStatusOnline();
+  try {
+    if (window.pywebview.api.get_initial_state) {
+      const initSnap = await window.pywebview.api.get_initial_state();
+      if (initSnap && initSnap.stats && window.handleEngineEvent) {
+        window.handleEngineEvent({ type: "INIT_STATE", data: initSnap });
+      }
+    }
+  } catch (e) {
+    console.warn("[DesktopBridge] Could not load initial state snapshot:", e);
+  }
+});

@@ -798,3 +798,11 @@ async def root():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+@app.get("/styles.css")
+async def get_root_styles():
+    return FileResponse(os.path.join(FRONTEND_DIR, "styles.css"), media_type="text/css")
+
+@app.get("/app.js")
+async def get_root_app_js():
+    return FileResponse(os.path.join(FRONTEND_DIR, "app.js"), media_type="application/javascript")
