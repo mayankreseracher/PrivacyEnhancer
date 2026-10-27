@@ -339,7 +339,7 @@ def main():
         {"path": "/lib/systemd/system/trackercontrol.service", "content": service_content, "mode": 0o100644},
     ]
     
-    version = os.environ.get("VERSION", "1.1.0").lstrip("v")
+    version = os.environ.get("VERSION", "1.2.0").lstrip("v")
     metadata = {
         "name": "trackercontrol",
         "version": version,

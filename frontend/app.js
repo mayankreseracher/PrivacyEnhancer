@@ -10,6 +10,20 @@
 const isNativeDesktop = Boolean(window.pywebview || window.location.protocol === "file:");
 const API_BASE = "";
 
+// Extract and persist auth token for browser-mode dashboard
+(function() {
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenParam = urlParams.get("token");
+    if (tokenParam) {
+      sessionStorage.setItem("tc_auth_token", tokenParam);
+      // Clean token from address bar for security without reloading
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  } catch (e) {}
+})();
+
 // Transparent In-Memory Fetch Interceptor for Native Desktop GUI
 const _originalFetch = window.fetch;
 window.fetch = async function(resource, init = {}) {
@@ -57,16 +71,26 @@ window.fetch = async function(resource, init = {}) {
     }
   }
 
-  // Inject CSRF protection header for standard HTTP fetch
+  // Inject CSRF protection header and Authorization token for standard HTTP fetch
   init = init || {};
+  const storedToken = sessionStorage.getItem("tc_auth_token");
   if (init.headers instanceof Headers) {
     if (!init.headers.has("X-Requested-With")) {
       init.headers.append("X-Requested-With", "TrackerControl");
     }
+    if (storedToken && !init.headers.has("Authorization")) {
+      init.headers.append("Authorization", `Bearer ${storedToken}`);
+    }
   } else if (Array.isArray(init.headers)) {
     init.headers.push(["X-Requested-With", "TrackerControl"]);
+    if (storedToken) {
+      init.headers.push(["Authorization", `Bearer ${storedToken}`]);
+    }
   } else {
     init.headers = Object.assign({}, init.headers, { "X-Requested-With": "TrackerControl" });
+    if (storedToken) {
+      init.headers["Authorization"] = `Bearer ${storedToken}`;
+    }
   }
 
   return _originalFetch.call(this, resource, init);
@@ -240,17 +264,19 @@ function getCandidateWsUrls() {
   const isHttps = window.location.protocol === "https:";
   const wsProto = isHttps ? "wss:" : "ws:";
   const host = window.location.host;
+  const storedToken = sessionStorage.getItem("tc_auth_token");
+  const tokenQuery = storedToken ? `?token=${encodeURIComponent(storedToken)}` : "";
   
   const urls = [];
   // 1. Prefer current host that loaded the UI
   if (host && window.location.protocol !== "file:") {
-    urls.push(`${wsProto}//${host}/ws`);
+    urls.push(`${wsProto}//${host}/ws${tokenQuery}`);
   }
   // 2. IPv4 loopback (primary for local desktop engine)
-  urls.push(`${wsProto}//127.0.0.1:8000/ws`);
+  urls.push(`${wsProto}//127.0.0.1:8000/ws${tokenQuery}`);
   // 3. Fallback hostname
   if (host !== "localhost:8000") {
-    urls.push(`${wsProto}//localhost:8000/ws`);
+    urls.push(`${wsProto}//localhost:8000/ws${tokenQuery}`);
   }
   return [...new Set(urls)];
 }
@@ -3296,6 +3322,7 @@ window.openBackgroundServiceModal = function() {
     modal.classList.add("active");
     loadAutostartStatus();
     fetchVaultStatus();
+    fetchDnsStatus();
   }
 };
 
@@ -3368,6 +3395,32 @@ window.fetchVaultStatus = async function() {
     }
   } catch (e) {
     console.warn("Could not load vault status:", e);
+  }
+};
+
+window.fetchDnsStatus = async function() {
+  try {
+    const res = await fetch(`${API_BASE}/api/dns/status`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const badge = document.getElementById("dnsFailClosedBadge");
+    const disclosure = document.getElementById("dnsDisclosureText");
+    if (badge) {
+      if (data.fail_closed) {
+        badge.textContent = "Fail-Closed Active";
+        badge.style.background = "rgba(0, 255, 157, 0.15)";
+        badge.style.color = "#00ff9d";
+      } else {
+        badge.textContent = "UDP Fallback Permitted";
+        badge.style.background = "rgba(255, 170, 0, 0.15)";
+        badge.style.color = "#ffaa00";
+      }
+    }
+    if (disclosure && data.disclosure) {
+      disclosure.textContent = data.disclosure;
+    }
+  } catch (e) {
+    console.warn("Could not load DNS status:", e);
   }
 };
 

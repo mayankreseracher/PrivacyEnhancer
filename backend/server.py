@@ -26,10 +26,13 @@ from starlette.requests import Request
 class APISecurityManager:
     """
     Enforces strong authentication and authorization on administrative API endpoints.
-    Protects TrackerControl PC against unauthorized local network (LAN) and remote access.
+    Protects TrackerControl PC against unauthorized local network (LAN) access, browser-mode CSRF,
+    and unauthenticated local service control.
     """
     def __init__(self):
         self._auth_token: Optional[str] = os.environ.get("TRACKERCONTROL_API_KEY")
+        if not self._auth_token:
+            self._auth_token = secrets.token_urlsafe(32)
         self.remote_access_allowed: bool = False
         self.require_auth_all: bool = False
 
@@ -64,12 +67,40 @@ class APISecurityManager:
             return False
         return secrets.compare_digest(token_to_check, self._auth_token)
 
-    def validate_request(self, client_host: str, auth_header: Optional[str] = None, query_token: Optional[str] = None) -> bool:
-        # Loopback is allowed by default unless strict auth is enforced
-        if self.is_loopback(client_host) and not self.require_auth_all:
+    def is_privileged_request(self, path: str, method: str) -> bool:
+        """
+        Determines whether an API path/method represents a privileged or state-changing action.
+        Privileged actions require token authentication even from loopback/localhost clients.
+        """
+        clean_method = (method or "GET").upper()
+        clean_path = path.rstrip("/")
+
+        # All mutating actions (POST, PUT, DELETE, PATCH) under /api/ are privileged
+        if clean_method in ("POST", "PUT", "DELETE", "PATCH") and (clean_path.startswith("/api/") or clean_path == "/api"):
             return True
 
-        return self.validate_token(auth_header, query_token)
+        # Sensitive read endpoints that should not be exposed to unauthenticated local callers
+        sensitive_reads = {
+            "/api/system/vault-status",
+            "/api/vpn/wireguard/generate-keypair",
+            "/api/vpn/proton/auth",
+        }
+        if clean_path in sensitive_reads:
+            return True
+
+        return False
+
+    def validate_request(self, client_host: str, method: str, path: str, auth_header: Optional[str] = None, query_token: Optional[str] = None) -> bool:
+        # If strict auth is globally enforced or client is non-loopback, mandate token
+        if self.require_auth_all or not self.is_loopback(client_host):
+            return self.validate_token(auth_header, query_token)
+
+        # For loopback clients, require authentication if accessing privileged endpoints
+        if self.is_privileged_request(path, method):
+            return self.validate_token(auth_header, query_token)
+
+        # Non-privileged loopback read-only endpoints are accessible
+        return True
 
 api_security = APISecurityManager()
 
@@ -86,7 +117,7 @@ ALLOWED_ORIGIN_HOSTS = {
 
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
-app = FastAPI(title="TrackerControl PC", version="1.1.0")
+app = FastAPI(title="TrackerControl PC", version="1.2.0")
 
 # Enable CORS restricted to localhost & local dashboard for CSRF & RCE security
 app.add_middleware(
@@ -187,12 +218,12 @@ async def enforce_api_authentication(request: Request, call_next):
     auth_header = request.headers.get("Authorization") or request.headers.get("X-API-Key")
     query_token = request.query_params.get("token")
 
-    if not api_security.validate_request(client_host, auth_header, query_token):
+    if not api_security.validate_request(client_host, request.method, path, auth_header, query_token):
         return JSONResponse(
             status_code=401,
             content={
-                "error": "Unauthorized: Administrative API access requires authentication.",
-                "hint": "Provide a valid token via Authorization: Bearer <token> or X-API-Key header."
+                "error": "Unauthorized: Access to this administrative or privileged API endpoint requires authentication.",
+                "hint": "Provide a valid token via Authorization: Bearer <token>, X-API-Key header, or ?token= query parameter."
             }
         )
 
@@ -239,7 +270,7 @@ async def websocket_endpoint(websocket: WebSocket):
     auth_header = websocket.headers.get("Authorization") or websocket.headers.get("X-API-Key")
     query_token = websocket.query_params.get("token")
 
-    if not api_security.validate_request(client_host, auth_header, query_token):
+    if not api_security.validate_request(client_host, "GET", "/ws", auth_header, query_token):
         await websocket.close(code=4401, reason="Unauthorized: Administrative WebSocket requires authentication")
         return
 
@@ -400,7 +431,7 @@ class TelemetryToggleRequest(BaseModel):
 
 @app.post("/api/telemetry/toggle")
 async def toggle_telemetry(payload: TelemetryToggleRequest):
-    tgt = payload.service.lower()
+    tgt = payload.service.lower().strip()
     if tgt == "diagtrack":
         return engine.firewall.toggle_diagtrack(payload.disable)
     elif tgt == "dmwappushservice":
@@ -408,8 +439,12 @@ async def toggle_telemetry(payload: TelemetryToggleRequest):
     elif tgt == "advertising_id":
         return engine.firewall.toggle_advertising_id(payload.disable)
     elif PlatformHelper.get_os_type() == "macOS":
+        if tgt not in engine.firewall.ALLOWED_MACOS_TELEMETRY_SERVICES:
+            return {"success": False, "error": f"Disallowed macOS telemetry service '{payload.service}'. Must be in allowlist."}
         return engine.firewall.toggle_macos_telemetry(payload.service, payload.disable)
     else:
+        if tgt not in engine.firewall.ALLOWED_LINUX_TELEMETRY_SERVICES:
+            return {"success": False, "error": f"Disallowed Linux telemetry service '{payload.service}'. Must be in allowlist."}
         return engine.firewall.toggle_linux_telemetry(payload.service, payload.disable)
 
 # Legacy Windows privacy endpoint for backward compatibility
@@ -829,7 +864,7 @@ async def export_csv():
 async def get_updater_status():
     if hasattr(engine, "updater") and engine.updater:
         return engine.updater.get_status()
-    return {"status": "disabled", "current_version": "1.1.0"}
+    return {"status": "disabled", "current_version": "1.2.0"}
 
 @app.post("/api/updater/check")
 async def check_for_updates():
@@ -964,6 +999,16 @@ async def set_dns_encryption_protocol(payload: Dict[str, Any]):
         return engine.dns_proxy.set_upstream_protocol(protocol)
     return {"success": False, "error": "DNS Proxy unavailable"}
 
+class DnsFallbackRequest(BaseModel):
+    allow_fallback: bool
+
+@app.post("/api/dns/fallback")
+async def set_dns_fallback(payload: DnsFallbackRequest):
+    """Enables or disables plaintext UDP fallback when encrypted DoH/DoT fails."""
+    if hasattr(engine, "dns_proxy") and engine.dns_proxy:
+        return engine.dns_proxy.set_plaintext_fallback(payload.allow_fallback)
+    return {"success": False, "error": "DNS Proxy unavailable"}
+
 @app.post("/api/dns/restore-emergency")
 async def restore_dns_emergency():
     """Restores host OS network interfaces to DHCP / default DNS immediately."""
@@ -977,7 +1022,7 @@ async def restore_dns_emergency():
 async def get_system_service_status():
     return {
         "status": "online",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "persistent_background_mode": True,
         "shield_active": engine.shield_active,
         "protection_mode": engine.protection_mode,

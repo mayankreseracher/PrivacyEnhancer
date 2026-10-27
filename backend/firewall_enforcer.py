@@ -42,6 +42,55 @@ class FirewallEnforcer:
         ]
     ]
 
+    ALLOWED_LINUX_TELEMETRY_SERVICES = {
+        "whoopsie", "apport", "popularity-contest", "ubuntu-report",
+        "abrt-journal-core", "insights-client", "systemd-coredump"
+    }
+
+    ALLOWED_MACOS_TELEMETRY_SERVICES = {
+        "auto_submit", "diagnostics", "crashreporter", "personalized_ads",
+        "advertising_id", "adlib", "safari_suggestions", "siri", "spotlight",
+        "analyticsd", "diagnosticd"
+    }
+
+    ALLOWED_WINDOWS_TELEMETRY_SERVICES = {
+        "diagtrack", "dmwappushservice", "advertising_id"
+    }
+
+    @staticmethod
+    def _carve_out_windows_ipv4_ranges(allowed_ips: List[str]) -> str:
+        """
+        Generates Windows netsh remoteip ranges covering all non-loopback IPv4 addresses
+        except the explicitly permitted VPN endpoint IPs.
+        """
+        ranges = [
+            (int(ipaddress.IPv4Address("1.0.0.0")), int(ipaddress.IPv4Address("126.255.255.255"))),
+            (int(ipaddress.IPv4Address("128.0.0.0")), int(ipaddress.IPv4Address("255.255.255.255")))
+        ]
+        for ip_str in allowed_ips:
+            try:
+                ip_int = int(ipaddress.IPv4Address(ip_str.strip()))
+                new_ranges = []
+                for s, e in ranges:
+                    if s <= ip_int <= e:
+                        if ip_int > s:
+                            new_ranges.append((s, ip_int - 1))
+                        if ip_int < e:
+                            new_ranges.append((ip_int + 1, e))
+                    else:
+                        new_ranges.append((s, e))
+                ranges = new_ranges
+            except Exception:
+                continue
+
+        parts = []
+        for s, e in ranges:
+            if s == e:
+                parts.append(str(ipaddress.IPv4Address(s)))
+            else:
+                parts.append(f"{ipaddress.IPv4Address(s)}-{ipaddress.IPv4Address(e)}")
+        return ",".join(parts) if parts else "1.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255"
+
     @classmethod
     def is_shared_infrastructure(cls, ip_address: str) -> bool:
         """
@@ -620,21 +669,32 @@ class FirewallEnforcer:
         return status
 
     def toggle_linux_telemetry(self, service_name: str, disable: bool) -> Dict[str, Any]:
-        """Disables or enables a Linux telemetry service via systemctl."""
+        """Disables or enables a Linux telemetry service via systemctl with strict service allowlist."""
         if not IS_LINUX:
             return {"success": False, "error": "Not on Linux"}
 
+        clean_service = (service_name or "").strip().lower()
+        if clean_service.endswith(".service"):
+            clean_service = clean_service[:-8]
+
+        if clean_service not in self.ALLOWED_LINUX_TELEMETRY_SERVICES:
+            logger.warning(f"Unauthorized service control attempt rejected: {service_name}")
+            return {
+                "success": False,
+                "error": f"Unauthorized service '{service_name}'. Service control is strictly restricted to verified telemetry services: {sorted(self.ALLOWED_LINUX_TELEMETRY_SERVICES)}"
+            }
+
         if shutil.which("systemctl"):
             if disable:
-                self._run_cmd(["systemctl", "stop", service_name])
-                self._run_cmd(["systemctl", "disable", service_name])
-                self._run_cmd(["systemctl", "mask", service_name])
-                return {"success": True, "service": service_name, "status": "Disabled & Masked"}
+                self._run_cmd(["systemctl", "stop", clean_service])
+                self._run_cmd(["systemctl", "disable", clean_service])
+                self._run_cmd(["systemctl", "mask", clean_service])
+                return {"success": True, "service": clean_service, "status": "Disabled & Masked"}
             else:
-                self._run_cmd(["systemctl", "unmask", service_name])
-                self._run_cmd(["systemctl", "enable", service_name])
-                self._run_cmd(["systemctl", "start", service_name])
-                return {"success": True, "service": service_name, "status": "Enabled & Started"}
+                self._run_cmd(["systemctl", "unmask", clean_service])
+                self._run_cmd(["systemctl", "enable", clean_service])
+                self._run_cmd(["systemctl", "start", clean_service])
+                return {"success": True, "service": clean_service, "status": "Enabled & Started"}
 
         return {"success": False, "error": "systemctl not available"}
 
@@ -722,25 +782,79 @@ class FirewallEnforcer:
                     "error": "Administrative privileges required to configure Windows Firewall kill switch rules."
                 }
 
-            # Delete any existing kill switch rules first
+            # Delete any existing kill switch rules and previous VPN endpoint allow rules
             for rname in [f"{prefix}_BlockIPv4", f"{prefix}_BlockIPv6", f"{prefix}_BlockDNS", prefix]:
                 self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rname}"])
+            self._run_cmd(["powershell", "-NoProfile", "-Command", f"Get-NetFirewallRule -DisplayName '{prefix}_AllowVPN*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"])
 
             if active:
-                # 1. Block all general outbound IPv4 clearnet (except loopback 127.0.0.0/8)
+                allowed_v4_ips = []
+                allowed_v6_ips = []
+
+                # 1. Add narrowly scoped outbound ALLOW rules for configured VPN endpoints BEFORE enabling block rules
+                if allowed_endpoints:
+                    for idx, ep in enumerate(allowed_endpoints):
+                        try:
+                            if isinstance(ep, (tuple, list)):
+                                host = str(ep[0]).strip()
+                                port = str(ep[1]).strip() if len(ep) > 1 and ep[1] else None
+                            else:
+                                clean_ep = str(ep).strip()
+                                host = clean_ep
+                                port = None
+                                if ":" in clean_ep and not clean_ep.startswith("["):
+                                    host, port = clean_ep.split(":", 1)
+                                elif clean_ep.startswith("[") and "]:" in clean_ep:
+                                    host = clean_ep[1:clean_ep.index("]:")]
+                                    port = clean_ep.split("]:", 1)[1]
+
+                            ip_obj = ipaddress.ip_address(host)
+                            rule_name = f"{prefix}_AllowVPN_{idx}"
+                            cmd_allow = [
+                                "netsh", "advfirewall", "firewall", "add", "rule",
+                                f"name={rule_name}",
+                                "dir=out",
+                                "action=allow",
+                                f"remoteip={host}",
+                                "description=TrackerControl KillSwitch Permit Active VPN Endpoint"
+                            ]
+                            if port and port.isdigit():
+                                cmd_allow.extend(["protocol=UDP", f"remoteport={port}"])
+
+                            s_al, out_al = self._run_cmd(cmd_allow)
+                            if not s_al:
+                                self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"])
+                                return {
+                                    "success": False,
+                                    "kill_switch": False,
+                                    "error": f"Failed to allow VPN endpoint {host}: {out_al}"
+                                }
+
+                            if ip_obj.version == 4:
+                                allowed_v4_ips.append(str(ip_obj))
+                            else:
+                                allowed_v6_ips.append(str(ip_obj))
+                        except Exception as e:
+                            logger.warning(f"Error parsing allowed endpoint {ep}: {e}")
+
+                # 2. Carve out allowed VPN IPs from IPv4 block ranges so block rules never drop tunnel traffic
+                v4_ranges = self._carve_out_windows_ipv4_ranges(allowed_v4_ips)
+
                 cmd_v4 = [
                     "netsh", "advfirewall", "firewall", "add", "rule",
                     f"name={prefix}_BlockIPv4",
                     "dir=out",
                     "action=block",
-                    "remoteip=1.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255",
+                    f"remoteip={v4_ranges}",
                     "description=TrackerControl KillSwitch Default-Deny IPv4"
                 ]
                 s1, out1 = self._run_cmd(cmd_v4)
                 if not s1:
+                    # Roll back allow rules on failure
+                    self._run_cmd(["powershell", "-NoProfile", "-Command", f"Get-NetFirewallRule -DisplayName '{prefix}_AllowVPN*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"])
                     return {"success": False, "kill_switch": False, "error": f"Failed to install IPv4 kill switch: {out1}"}
 
-                # 2. Block all general outbound IPv6 clearnet (except loopback ::1)
+                # 3. Block general outbound IPv6 clearnet (except loopback ::1)
                 cmd_v6 = [
                     "netsh", "advfirewall", "firewall", "add", "rule",
                     f"name={prefix}_BlockIPv6",
@@ -751,7 +865,7 @@ class FirewallEnforcer:
                 ]
                 s2, out2 = self._run_cmd(cmd_v6)
 
-                # 3. Block UDP DNS ports 53/853/3478 to prevent leak attempts
+                # 4. Block UDP DNS ports 53/853/3478 to prevent leak attempts
                 cmd_dns = [
                     "netsh", "advfirewall", "firewall", "add", "rule",
                     f"name={prefix}_BlockDNS",
@@ -767,7 +881,7 @@ class FirewallEnforcer:
                     "success": True,
                     "kill_switch": True,
                     "policy": "DEFAULT_DENY",
-                    "output": "Default-deny kill switch active. All outbound clearnet blocked outside VPN tunnel."
+                    "output": f"Default-deny kill switch active with {len(allowed_v4_ips) + len(allowed_v6_ips)} permitted VPN endpoints."
                 }
             else:
                 return {"success": True, "kill_switch": False, "output": "Kill switch disarmed. Clearnet traffic permitted."}
@@ -815,23 +929,43 @@ class FirewallEnforcer:
                 if not s_c:
                     return {"success": False, "kill_switch": False, "error": f"Failed to create iptables chain: {out_c}"}
 
+                # CRITICAL ORDERING FIX: Restrict traffic to loopback, local DHCP, and VPN interfaces FIRST.
+                # Never accept broad ESTABLISHED,RELATED on clearnet interfaces (e.g. eth0/wlan0)
                 v4_rules = [
+                    # 1. Allow loopback traffic
                     ["iptables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"],
-                    ["iptables", "-A", chain_name, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+                    # 2. Allow local DHCP renewal
                     ["iptables", "-A", chain_name, "-p", "udp", "--sport", "68", "--dport", "67", "-j", "ACCEPT"],
+                    # 3. Allow all traffic routed through VPN tunnel interfaces
                     ["iptables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"],
                     ["iptables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"],
                 ]
+                # 4. Allow traffic to explicitly configured VPN server endpoints
                 if allowed_endpoints:
                     for ep in allowed_endpoints:
                         try:
-                            if ":" in ep:
-                                host, port = ep.split(":", 1)
-                                v4_rules.append(["iptables", "-A", chain_name, "-d", host, "-p", "udp", "--dport", port, "-j", "ACCEPT"])
+                            if isinstance(ep, (tuple, list)):
+                                host = str(ep[0]).strip()
+                                port = str(ep[1]).strip() if len(ep) > 1 and ep[1] else None
                             else:
-                                v4_rules.append(["iptables", "-A", chain_name, "-d", ep, "-j", "ACCEPT"])
+                                clean_ep = str(ep).strip()
+                                host = clean_ep
+                                port = None
+                                if ":" in clean_ep:
+                                    host, port = clean_ep.split(":", 1)
+
+                            if port and str(port).isdigit():
+                                v4_rules.append(["iptables", "-A", chain_name, "-d", host, "-p", "udp", "--dport", str(port), "-j", "ACCEPT"])
+                            else:
+                                v4_rules.append(["iptables", "-A", chain_name, "-d", host, "-j", "ACCEPT"])
                         except Exception:
                             pass
+
+                # 5. ONLY accept ESTABLISHED,RELATED on VPN or loopback interfaces (never clearnet interfaces)
+                v4_rules.append(["iptables", "-A", chain_name, "-o", "wg+", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+                v4_rules.append(["iptables", "-A", chain_name, "-o", "tun+", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+
+                # 6. Default-Deny: drop all remaining clearnet traffic (including any existing non-VPN connections)
                 v4_rules.append(["iptables", "-A", chain_name, "-j", "DROP"])
 
                 for r in v4_rules:
@@ -854,12 +988,15 @@ class FirewallEnforcer:
 
                     v6_rules = [
                         ["ip6tables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"],
-                        ["ip6tables", "-A", chain_name, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
                         ["ip6tables", "-A", chain_name, "-p", "udp", "--sport", "546", "--dport", "547", "-j", "ACCEPT"],
                         ["ip6tables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"],
                         ["ip6tables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"],
-                        ["ip6tables", "-A", chain_name, "-j", "DROP"],
                     ]
+                    # Accept ESTABLISHED,RELATED on VPN interfaces only
+                    v6_rules.append(["ip6tables", "-A", chain_name, "-o", "wg+", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+                    v6_rules.append(["ip6tables", "-A", chain_name, "-o", "tun+", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+                    v6_rules.append(["ip6tables", "-A", chain_name, "-j", "DROP"])
+
                     for r in v6_rules:
                         s6_r, out6_r = self._run_cmd(r)
                         if not s6_r:

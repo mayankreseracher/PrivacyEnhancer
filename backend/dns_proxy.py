@@ -46,6 +46,10 @@ class DNSProxy:
 
         # Encrypted DNS Configuration (DoH / DoT / UDP fallback)
         self.upstream_protocol: str = os.environ.get("TRACKERCONTROL_DNS_PROTOCOL", "doh").lower()
+        self.allow_plaintext_fallback: bool = os.environ.get("TRACKERCONTROL_DNS_FALLBACK", "false").lower() in ("true", "1", "yes")
+        self.plaintext_fallback_count: int = 0
+        self.last_fallback_timestamp: Optional[float] = None
+        self.last_fallback_resolver: Optional[str] = None
         self.doh_endpoints: List[str] = [
             "https://cloudflare-dns.com/dns-query",
             "https://dns.quad9.net/dns-query",
@@ -279,7 +283,7 @@ class DNSProxy:
                     headers={
                         "Content-Type": "application/dns-message",
                         "Accept": "application/dns-message",
-                        "User-Agent": "TrackerControl-PC-Privacy/1.1.0"
+                        "User-Agent": "TrackerControl-PC-Privacy/1.2.0"
                     },
                     method="POST"
                 )
@@ -373,6 +377,7 @@ class DNSProxy:
         """
         Synchronously forwards DNS query according to configured privacy transport protocol.
         Defaults to encrypted DNS-over-HTTPS (DoH) with resilient multi-endpoint fallback.
+        Fails closed by default to prevent plaintext DNS leakage if encrypted resolvers are unreachable.
         """
         if self.upstream_protocol == "doh":
             resp = self._forward_upstream_doh(data)
@@ -382,7 +387,17 @@ class DNSProxy:
             resp_dot = self._forward_upstream_dot(data)
             if resp_dot:
                 return resp_dot
+
+            if not self.allow_plaintext_fallback:
+                # Fail closed: Do NOT leak queries via plaintext UDP unless user explicitly opted in
+                return None
+
+            # User explicitly opted into plaintext fallback
+            self.plaintext_fallback_count += 1
+            self.last_fallback_timestamp = time.time()
+            self.last_fallback_resolver = self.upstream_dns
             return self._forward_upstream_udp(data)
+
         elif self.upstream_protocol == "dot":
             resp = self._forward_upstream_dot(data)
             if resp:
@@ -390,7 +405,17 @@ class DNSProxy:
             resp_doh = self._forward_upstream_doh(data)
             if resp_doh:
                 return resp_doh
+
+            if not self.allow_plaintext_fallback:
+                # Fail closed: Do NOT leak queries via plaintext UDP unless user explicitly opted in
+                return None
+
+            # User explicitly opted into plaintext fallback
+            self.plaintext_fallback_count += 1
+            self.last_fallback_timestamp = time.time()
+            self.last_fallback_resolver = self.upstream_dns
             return self._forward_upstream_udp(data)
+
         else:
             # Explicit plaintext UDP mode
             return self._forward_upstream_udp(data)
@@ -398,23 +423,41 @@ class DNSProxy:
     def get_dns_status(self) -> Dict[str, Any]:
         """
         Returns the DNS sinkhole and upstream transport status,
-        including end-to-end encryption mode and explicit privacy disclosures.
+        including end-to-end encryption mode, fallback metrics, and explicit privacy disclosures.
         """
         is_enc = self.upstream_protocol in ("doh", "dot")
+        fallback_occurred = self.plaintext_fallback_count > 0
+
         if self.upstream_protocol == "doh":
             proto_name = "DNS-over-HTTPS (DoH, RFC 8484)"
             resolvers = self.doh_endpoints
-            disclosure = (
-                "All upstream DNS queries are end-to-end encrypted using DNS-over-HTTPS (DoH, RFC 8484). "
-                "Domain resolution is fully protected against ISP monitoring and local network sniffing."
-            )
+            if fallback_occurred:
+                is_enc = False
+                disclosure = (
+                    f"PRIVACY ALERT: Configured for DoH, but encrypted resolution failed and unencrypted UDP fallback "
+                    f"occurred {self.plaintext_fallback_count} time(s). Upstream lookups may have leaked in plaintext to "
+                    f"{self.last_fallback_resolver or self.upstream_dns}."
+                )
+            else:
+                disclosure = (
+                    "All upstream DNS queries are end-to-end encrypted using DNS-over-HTTPS (DoH, RFC 8484). "
+                    "Domain resolution is fully protected against ISP monitoring and local network sniffing."
+                )
         elif self.upstream_protocol == "dot":
             proto_name = "DNS-over-TLS (DoT, RFC 7858)"
             resolvers = [f"{h[0]}:853 ({h[1]})" for h in self.dot_endpoints]
-            disclosure = (
-                "All upstream DNS queries are encrypted using DNS-over-TLS (DoT, RFC 7858) on port 853. "
-                "Domain lookups cannot be inspected on the network path."
-            )
+            if fallback_occurred:
+                is_enc = False
+                disclosure = (
+                    f"PRIVACY ALERT: Configured for DoT, but encrypted resolution failed and unencrypted UDP fallback "
+                    f"occurred {self.plaintext_fallback_count} time(s). Upstream lookups may have leaked in plaintext to "
+                    f"{self.last_fallback_resolver or self.upstream_dns}."
+                )
+            else:
+                disclosure = (
+                    "All upstream DNS queries are encrypted using DNS-over-TLS (DoT, RFC 7858) on port 853. "
+                    "Domain lookups cannot be inspected on the network path."
+                )
         else:
             proto_name = "Plaintext UDP (Port 53)"
             resolvers = [f"{self.upstream_dns}:{self.upstream_port}"]
@@ -430,6 +473,11 @@ class DNSProxy:
             "protocol": self.upstream_protocol,
             "protocol_name": proto_name,
             "is_encrypted": is_enc,
+            "allow_plaintext_fallback": self.allow_plaintext_fallback,
+            "fail_closed": not self.allow_plaintext_fallback,
+            "plaintext_fallback_count": self.plaintext_fallback_count,
+            "last_fallback_timestamp": self.last_fallback_timestamp,
+            "last_fallback_resolver": self.last_fallback_resolver,
             "upstream_resolvers": resolvers,
             "disclosure": disclosure,
             "cache_entries": len(self.ip_to_domain_cache)
@@ -442,6 +490,22 @@ class DNSProxy:
             self.upstream_protocol = proto
             return {"success": True, "protocol": self.upstream_protocol, "status": self.get_dns_status()}
         return {"success": False, "error": f"Invalid protocol '{protocol}'. Choose from: doh, dot, udp"}
+
+    def set_plaintext_fallback(self, allowed: bool) -> Dict[str, Any]:
+        """Configures whether DNS resolution falls back to plaintext UDP if encrypted DoH/DoT fails."""
+        self.allow_plaintext_fallback = bool(allowed)
+        return {
+            "success": True,
+            "allow_plaintext_fallback": self.allow_plaintext_fallback,
+            "fail_closed": not self.allow_plaintext_fallback,
+            "status": self.get_dns_status()
+        }
+
+    def reset_fallback_counters(self):
+        """Resets fallback telemetry counters."""
+        self.plaintext_fallback_count = 0
+        self.last_fallback_timestamp = None
+        self.last_fallback_resolver = None
 
     async def _forward_upstream(self, data: bytes) -> Optional[bytes]:
         """

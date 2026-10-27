@@ -72,6 +72,13 @@ class DesktopBridge:
             (b"origin", b"null"),
             (b"sec-fetch-site", b"same-origin")
         ]
+        try:
+            from .server import api_security
+            token = api_security.get_auth_token()
+            if token:
+                headers.append((b"authorization", f"Bearer {token}".encode("ascii")))
+        except Exception:
+            pass
         if body is not None:
             if isinstance(body, (dict, list)):
                 raw_body = json.dumps(body).encode('utf-8')

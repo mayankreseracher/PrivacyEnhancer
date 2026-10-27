@@ -354,7 +354,17 @@ def run_browser_mode(server_started: bool = False, existing_tray=None):
 
     _start_engine_background(engine)
 
-    url = "http://127.0.0.1:8000"
+    import secrets
+    from backend.server import api_security
+    token = api_security.get_auth_token()
+    for i, arg in enumerate(sys.argv):
+        if arg == "--api-key" and i + 1 < len(sys.argv):
+            token = sys.argv[i + 1]
+    if not token:
+        token = secrets.token_urlsafe(32)
+    api_security.set_auth_token(token)
+
+    url = f"http://127.0.0.1:8000/?token={token}"
     print(f"\n[!] Headless / Browser Fallback Mode: Web Dashboard available at {url}")
 
     if existing_tray:
