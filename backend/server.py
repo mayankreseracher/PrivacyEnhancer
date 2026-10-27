@@ -19,6 +19,63 @@ from .engine import TrackerEngine
 from .platform_helper import PlatformHelper
 from .credential_vault import vault
 
+import secrets
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
+
+class APISecurityManager:
+    """
+    Enforces strong authentication and authorization on administrative API endpoints.
+    Protects TrackerControl PC against unauthorized local network (LAN) and remote access.
+    """
+    def __init__(self):
+        self._auth_token: Optional[str] = os.environ.get("TRACKERCONTROL_API_KEY")
+        self.remote_access_allowed: bool = False
+        self.require_auth_all: bool = False
+
+    def set_auth_token(self, token: str):
+        self._auth_token = token
+
+    def get_auth_token(self) -> Optional[str]:
+        return self._auth_token
+
+    def is_loopback(self, host: str) -> bool:
+        if not host:
+            return True
+        clean = host.strip().lower()
+        if clean in ("127.0.0.1", "::1", "localhost", "testclient", "desktop.internal", "trackercontrol.local"):
+            return True
+        if clean.startswith("127.") or clean == "::ffff:127.0.0.1":
+            return True
+        return False
+
+    def validate_request(self, client_host: str, auth_header: Optional[str] = None, query_token: Optional[str] = None) -> bool:
+        # Loopback is allowed by default unless strict auth is enforced
+        if self.is_loopback(client_host) and not self.require_auth_all:
+            return True
+
+        if not self._auth_token:
+            # If no auth token is established, deny all non-loopback network access
+            return False
+
+        token_to_check = None
+        if auth_header:
+            if auth_header.lower().startswith("bearer "):
+                token_to_check = auth_header[7:].strip()
+            else:
+                token_to_check = auth_header.strip()
+        elif query_token:
+            token_to_check = query_token.strip()
+
+        if not token_to_check:
+            return False
+
+        # Constant-time comparison to prevent timing side-channel attacks
+        return secrets.compare_digest(token_to_check, self._auth_token)
+
+api_security = APISecurityManager()
+
+
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
 
 app = FastAPI(title="TrackerControl PC", version="1.1.0")
@@ -39,6 +96,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def enforce_api_authentication(request: Request, call_next):
+    """
+    Enforces authentication for all administrative API endpoints.
+    Permits public static frontend assets and /health, but mandates strong authentication
+    for any network/LAN caller attempting to invoke administrative endpoints.
+    """
+    path = request.url.path
+    if path in ("/", "/styles.css", "/app.js", "/health", "/favicon.ico") or path.startswith("/static/"):
+        return await call_next(request)
+
+    client_host = request.client.host if request.client else "127.0.0.1"
+    auth_header = request.headers.get("Authorization") or request.headers.get("X-API-Key")
+    query_token = request.query_params.get("token")
+
+    if not api_security.validate_request(client_host, auth_header, query_token):
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "Unauthorized: Administrative API access requires authentication.",
+                "hint": "Provide a valid token via Authorization: Bearer <token> or X-API-Key header."
+            }
+        )
+
+    return await call_next(request)
+
+
 engine = TrackerEngine()
 
 @app.on_event("startup")
@@ -53,6 +137,14 @@ async def shutdown_event():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    client_host = websocket.client.host if websocket.client else "127.0.0.1"
+    auth_header = websocket.headers.get("Authorization") or websocket.headers.get("X-API-Key")
+    query_token = websocket.query_params.get("token")
+
+    if not api_security.validate_request(client_host, auth_header, query_token):
+        await websocket.close(code=4401, reason="Unauthorized: Administrative WebSocket requires authentication")
+        return
+
     await engine.register_websocket(websocket)
     try:
         import json, time

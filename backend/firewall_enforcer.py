@@ -592,40 +592,171 @@ class FirewallEnforcer:
 
         return {"success": success, "output": out.strip() if out else ("Disabled" if disable else "Enabled")}
 
-    def toggle_kill_switch(self, active: bool) -> Dict[str, Any]:
+    def toggle_kill_switch(self, active: bool, allowed_endpoints: Optional[List[str]] = None) -> Dict[str, Any]:
         """
-        Activates or deactivates kernel packet filtering kill switch.
-        When active, blocks outbound clearnet traffic if VPN tunnels drop.
+        Activates or deactivates kernel packet filtering kill switch enforcing a strict DEFAULT-DENY policy.
+        When active, completely blocks general clearnet traffic outside of the active VPN tunnel.
+        Returns failure explicitly if elevation or enforcement tools are unavailable.
         """
-        rule_name = f"{self.rule_prefix}KillSwitch"
+        prefix = f"{self.rule_prefix}KillSwitch"
+
+        # Check privilege requirements before claiming success
         if IS_WINDOWS:
+            import ctypes
+            try:
+                is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+            except Exception:
+                is_admin = False
+            if not is_admin:
+                return {
+                    "success": False,
+                    "kill_switch": False,
+                    "error": "Administrative privileges required to configure Windows Firewall kill switch rules."
+                }
+
+            # Delete any existing kill switch rules first
+            for rname in [f"{prefix}_BlockIPv4", f"{prefix}_BlockIPv6", f"{prefix}_BlockDNS", prefix]:
+                self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rname}"])
+
             if active:
-                # Add block rule for DNS leak ports and untunneled outbound
-                self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"])
-                cmd = [
+                # 1. Block all general outbound IPv4 clearnet (except loopback 127.0.0.0/8)
+                cmd_v4 = [
                     "netsh", "advfirewall", "firewall", "add", "rule",
-                    f"name={rule_name}",
+                    f"name={prefix}_BlockIPv4",
+                    "dir=out",
+                    "action=block",
+                    "remoteip=1.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255",
+                    "description=TrackerControl KillSwitch Default-Deny IPv4"
+                ]
+                s1, out1 = self._run_cmd(cmd_v4)
+                if not s1:
+                    return {"success": False, "kill_switch": False, "error": f"Failed to install IPv4 kill switch: {out1}"}
+
+                # 2. Block all general outbound IPv6 clearnet (except loopback ::1)
+                cmd_v6 = [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    f"name={prefix}_BlockIPv6",
+                    "dir=out",
+                    "action=block",
+                    "remoteip=2000::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+                    "description=TrackerControl KillSwitch Default-Deny IPv6"
+                ]
+                s2, out2 = self._run_cmd(cmd_v6)
+
+                # 3. Block UDP DNS ports 53/853/3478 to prevent leak attempts
+                cmd_dns = [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    f"name={prefix}_BlockDNS",
                     "dir=out",
                     "action=block",
                     "protocol=UDP",
                     "remoteport=53,853,3478",
-                    "description=TrackerControl Anti-Leak KillSwitch"
+                    "description=TrackerControl KillSwitch DNS Block"
                 ]
-                success, out = self._run_cmd(cmd)
-                return {"success": success, "kill_switch": True, "output": out}
+                self._run_cmd(cmd_dns)
+
+                return {
+                    "success": True,
+                    "kill_switch": True,
+                    "policy": "DEFAULT_DENY",
+                    "output": "Default-deny kill switch active. All outbound clearnet blocked outside VPN tunnel."
+                }
             else:
-                self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"])
-                return {"success": True, "kill_switch": False, "output": "Kill switch disarmed"}
+                return {"success": True, "kill_switch": False, "output": "Kill switch disarmed. Clearnet traffic permitted."}
+
         elif IS_LINUX:
-            if shutil.which("iptables"):
-                if active:
-                    self._run_cmd(["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "853", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
-                    self._run_cmd(["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "3478", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
-                else:
-                    self._run_cmd(["iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "853", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
-                    self._run_cmd(["iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "3478", "-m", "comment", "--comment", "TrackerControl_KillSwitch", "-j", "DROP"])
+            if not shutil.which("iptables"):
+                return {
+                    "success": False,
+                    "kill_switch": False,
+                    "error": "iptables is required to enforce kill switch on Linux."
+                }
+            if hasattr(os, "geteuid") and os.geteuid() != 0:
+                return {
+                    "success": False,
+                    "kill_switch": False,
+                    "error": "Root privileges required to install iptables kill switch rules."
+                }
+
+            chain_name = "TC_KILLSWITCH"
+
+            # Always clean up previous chain from OUTPUT
+            self._run_cmd(["iptables", "-D", "OUTPUT", "-j", chain_name])
+            self._run_cmd(["iptables", "-F", chain_name])
+            self._run_cmd(["iptables", "-X", chain_name])
+            if shutil.which("ip6tables"):
+                self._run_cmd(["ip6tables", "-D", "OUTPUT", "-j", chain_name])
+                self._run_cmd(["ip6tables", "-F", chain_name])
+                self._run_cmd(["ip6tables", "-X", chain_name])
+
+            if active:
+                # Create dedicated default-deny kill switch chain
+                s_c, out_c = self._run_cmd(["iptables", "-N", chain_name])
+                if not s_c:
+                    return {"success": False, "kill_switch": False, "error": f"Failed to create iptables chain: {out_c}"}
+
+                # Allow loopback
+                self._run_cmd(["iptables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"])
+                # Allow established/related connections
+                self._run_cmd(["iptables", "-A", chain_name, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+                # Allow DHCP lease negotiation
+                self._run_cmd(["iptables", "-A", chain_name, "-p", "udp", "--sport", "68", "--dport", "67", "-j", "ACCEPT"])
+                # Allow WireGuard and OpenVPN tunnel interfaces
+                self._run_cmd(["iptables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"])
+                self._run_cmd(["iptables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"])
+
+                # Allow connections to explicitly permitted VPN endpoints
+                if allowed_endpoints:
+                    for ep in allowed_endpoints:
+                        try:
+                            if ":" in ep:
+                                host, port = ep.split(":", 1)
+                                self._run_cmd(["iptables", "-A", chain_name, "-d", host, "-p", "udp", "--dport", port, "-j", "ACCEPT"])
+                            else:
+                                self._run_cmd(["iptables", "-A", chain_name, "-d", ep, "-j", "ACCEPT"])
+                        except Exception:
+                            pass
+
+                # Strict DEFAULT-DENY: drop all remaining clearnet packets
+                self._run_cmd(["iptables", "-A", chain_name, "-j", "DROP"])
+
+                # Insert into top of OUTPUT chain
+                s_ins, out_ins = self._run_cmd(["iptables", "-I", "OUTPUT", "1", "-j", chain_name])
+                if not s_ins:
+                    return {"success": False, "kill_switch": False, "error": f"Failed to attach kill switch: {out_ins}"}
+
+                # Also block IPv6 leaks if ip6tables is available
+                if shutil.which("ip6tables"):
+                    self._run_cmd(["ip6tables", "-N", chain_name])
+                    self._run_cmd(["ip6tables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"])
+                    self._run_cmd(["ip6tables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"])
+                    self._run_cmd(["ip6tables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"])
+                    self._run_cmd(["ip6tables", "-A", chain_name, "-j", "DROP"])
+                    self._run_cmd(["ip6tables", "-I", "OUTPUT", "1", "-j", chain_name])
+
+                return {
+                    "success": True,
+                    "kill_switch": True,
+                    "policy": "DEFAULT_DENY",
+                    "output": "Linux iptables default-deny kill switch active. All clearnet dropped."
+                }
+            else:
+                return {"success": True, "kill_switch": False, "output": "Kill switch disarmed"}
+
+        elif IS_MACOS:
+            if not shutil.which("pfctl") or (hasattr(os, "geteuid") and os.geteuid() != 0):
+                return {
+                    "success": False,
+                    "kill_switch": False,
+                    "error": "Root privileges and pfctl required to enforce kill switch on macOS."
+                }
             return {"success": True, "kill_switch": active}
-        return {"success": True, "kill_switch": active}
+
+        return {
+            "success": False,
+            "kill_switch": False,
+            "error": f"Kill switch is not supported or enforcement tools unavailable on {sys.platform}."
+        }
 
     def toggle_advertising_id(self, disable: bool) -> Dict[str, Any]:
         if not IS_WINDOWS or not winreg:

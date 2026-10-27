@@ -3351,8 +3351,8 @@ window.fetchVaultStatus = async function() {
     const data = await res.json();
     const vaultEl = document.getElementById("vaultProviderStatus");
     if (vaultEl && data.provider) {
-      vaultEl.textContent = data.is_hardware_backed ? "Hardware DPAPI" : "Machine-Bound Vault";
-      vaultEl.title = `${data.provider} (${data.algorithm})`;
+      vaultEl.textContent = data.is_hardware_backed ? (data.platform === "darwin" ? "Apple Keychain" : "Hardware DPAPI") : "Protected Key Store (0600)";
+      vaultEl.title = `${data.provider} (${data.protection_limits || data.algorithm})`;
     }
   } catch (e) {
     console.warn("Could not load vault status:", e);

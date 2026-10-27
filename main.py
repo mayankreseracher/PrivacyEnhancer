@@ -370,7 +370,29 @@ def run_browser_mode(server_started: bool = False, existing_tray=None):
         print(f"[!] Could not open default web browser: {e}")
 
     if not server_started:
-        bind_host = "0.0.0.0" if any(a in sys.argv for a in ("--lan", "--public")) else "127.0.0.1"
+        is_remote = any(a in sys.argv for a in ("--lan", "--public", "--allow-remote-admin"))
+        bind_host = "127.0.0.1"
+        if is_remote:
+            bind_host = "0.0.0.0"
+            from backend.server import api_security
+            import secrets
+            token = os.environ.get("TRACKERCONTROL_API_KEY")
+            for i, arg in enumerate(sys.argv):
+                if arg == "--api-key" and i + 1 < len(sys.argv):
+                    token = sys.argv[i + 1]
+            if not token:
+                token = secrets.token_urlsafe(32)
+            api_security.set_auth_token(token)
+            api_security.remote_access_allowed = True
+            print("\n" + "=" * 72)
+            print(" [SECURITY WARNING] Remote Administrative API Access is ENABLED.")
+            print(f" [SECURITY WARNING] Listening on {bind_host}:8000 with MANDATORY authentication.")
+            print(f" [SECURITY WARNING] Admin API Key: {token}")
+            print(" [SECURITY WARNING] Remote clients MUST provide 'X-API-Key' or 'Authorization: Bearer'")
+            print("=" * 72 + "\n")
+        else:
+            print("[+] Administrative API strictly restricted to loopback (127.0.0.1).")
+
         try:
             uvicorn.run(app, host=bind_host, port=8000, log_level="info")
         except (KeyboardInterrupt, SystemExit):

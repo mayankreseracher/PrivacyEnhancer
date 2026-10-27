@@ -336,9 +336,22 @@ class TrackerEngine:
             self.dns_proxy.toggle_shield(active)
 
     def toggle_kill_switch(self, active: bool) -> Dict[str, Any]:
-        self.kill_switch_active = active
+        endpoints = []
+        if hasattr(self, "wireguard") and self.wireguard:
+            try:
+                for tid, tinfo in getattr(self.wireguard, "tunnels", {}).items():
+                    if tinfo.get("status") == "Connected" and tinfo.get("endpoint"):
+                        endpoints.append(tinfo["endpoint"])
+            except Exception:
+                pass
+
         if hasattr(self.firewall, "toggle_kill_switch"):
-            self.firewall.toggle_kill_switch(active)
+            fw_res = self.firewall.toggle_kill_switch(active, allowed_endpoints=endpoints)
+            if not fw_res.get("success", False) and active:
+                self.kill_switch_active = False
+                return fw_res
+
+        self.kill_switch_active = active
         return {"success": True, "kill_switch_active": self.kill_switch_active}
 
     def get_stats(self) -> Dict[str, Any]:
