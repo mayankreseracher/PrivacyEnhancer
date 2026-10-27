@@ -57,7 +57,19 @@ window.fetch = async function(resource, init = {}) {
     }
   }
 
-  return _originalFetch.apply(this, arguments);
+  // Inject CSRF protection header for standard HTTP fetch
+  init = init || {};
+  if (init.headers instanceof Headers) {
+    if (!init.headers.has("X-Requested-With")) {
+      init.headers.append("X-Requested-With", "TrackerControl");
+    }
+  } else if (Array.isArray(init.headers)) {
+    init.headers.push(["X-Requested-With", "TrackerControl"]);
+  } else {
+    init.headers = Object.assign({}, init.headers, { "X-Requested-With": "TrackerControl" });
+  }
+
+  return _originalFetch.call(this, resource, init);
 };
 
 let wsReconnectTimeout = null;

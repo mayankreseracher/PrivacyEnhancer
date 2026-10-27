@@ -366,7 +366,7 @@ class ProcessMonitor:
             if not control_mode:
                 control_mode = "block_trackers"
 
-            # Determine final status
+            # Determine initial intent and enforce policy
             status = "allowed"
             block_reason = None
 
@@ -375,35 +375,83 @@ class ProcessMonitor:
                 block_reason = "Shield Disabled"
             elif self.protection_mode in ("AUDIT", "AUDIT_ONLY"):
                 status = "allowed"
-                block_reason = "Audit Mode"
-            elif control_mode == "block_all":
-                status = "blocked"
-                block_reason = f"Application '{proc_name}' is set to Block All Outbound"
+                block_reason = "Audit Mode (Monitoring Only)"
             elif control_mode == "allow_all":
                 status = "allowed"
                 block_reason = "Application Whitelisted"
-            elif control_mode == "block_trackers":
-                if is_tracker:
-                    status = "blocked"
-                    block_reason = f"Matched Tracker Signature: {threat.get('name', 'Unknown Tracker')}"
-                else:
-                    status = "allowed"
             elif control_mode == "audit":
                 status = "allowed"
                 block_reason = "Audit Mode"
+            elif control_mode == "block_all":
+                # App-specific block: block entire application
+                if self.firewall and self.shield_active:
+                    fw_res = self.firewall.block_executable(exe_path, proc_name)
+                    if fw_res.get("success"):
+                        status = "blocked"
+                        block_reason = f"Application '{proc_name}' blocked by firewall policy"
+                    else:
+                        status = "flagged"
+                        err_detail = fw_res.get("error") or "Elevation required"
+                        block_reason = f"App set to Block All; firewall enforcement failed: {err_detail}"
+                else:
+                    status = "flagged"
+                    block_reason = f"App set to Block All (Firewall inactive)"
+            elif control_mode == "block_trackers":
+                if is_tracker:
+                    if not self.shield_active:
+                        status = "allowed"
+                        block_reason = "Shield Disabled"
+                    elif self._is_private_or_local(remote_ip):
+                        status = "allowed"
+                        block_reason = "Local / Private Network IP"
+                    elif not self.firewall:
+                        status = "flagged"
+                        block_reason = f"Matched Tracker: {threat.get('name', 'Unknown Tracker')} (Firewall inactive)"
+                    else:
+                        rule_key = f"{proc_name}_{remote_ip}"
+                        is_shared = getattr(self.firewall, "is_shared_infrastructure", lambda ip: False)(remote_ip)
 
-            # Enforce firewall blocking if tracker / blocked and shield is active
-            if status == "blocked" and self.shield_active:
-                if self.protection_mode in ("MAX_PRIVACY", "LOCKDOWN"):
-                    if self.firewall and remote_ip not in self.blocked_ips:
-                        if not self._is_private_or_local(remote_ip):
-                            try:
-                                self.firewall.block_ip(remote_ip)
-                            except Exception as e:
-                                print(f"[ProcessMonitor] Error blocking IP {remote_ip}: {e}")
-                            if len(self.blocked_ips) > 1000:
-                                self.blocked_ips.clear()
-                            self.blocked_ips.add(remote_ip)
+                        if rule_key in self.blocked_ips or (not is_shared and remote_ip in self.blocked_ips):
+                            status = "blocked"
+                            block_reason = f"Matched Tracker Signature: {threat.get('name', 'Unknown Tracker')}"
+                        elif is_shared:
+                            # CRITICAL: Prevent collateral damage on shared CDNs / multi-tenant infrastructure
+                            # Use application-isolated rule target, never drop global IP
+                            if hasattr(self.firewall, "block_app_target"):
+                                fw_res = self.firewall.block_app_target(exe_path, proc_name, remote_ip)
+                                if fw_res.get("success"):
+                                    status = "blocked"
+                                    block_reason = f"Blocked Tracker (App-Isolated on CDN): {threat.get('name', 'Unknown')}"
+                                    if len(self.blocked_ips) > 2000:
+                                        self.blocked_ips.clear()
+                                    self.blocked_ips.add(rule_key)
+                                else:
+                                    status = "flagged"
+                                    err_detail = fw_res.get("error") or "Elevation required"
+                                    block_reason = f"Tracker on shared CDN; app-isolated rule failed: {err_detail}"
+                            else:
+                                status = "flagged"
+                                block_reason = "Tracker on shared CDN; domain sinkholed at DNS layer"
+                        else:
+                            # Dedicated tracker IP: attempt app-isolated rule first if exe is known, else block_ip
+                            if exe_path and hasattr(self.firewall, "block_app_target"):
+                                fw_res = self.firewall.block_app_target(exe_path, proc_name, remote_ip)
+                            else:
+                                fw_res = self.firewall.block_ip(remote_ip)
+
+                            if fw_res.get("success"):
+                                status = "blocked"
+                                block_reason = f"Matched Tracker Signature: {threat.get('name', 'Unknown Tracker')}"
+                                if len(self.blocked_ips) > 2000:
+                                    self.blocked_ips.clear()
+                                self.blocked_ips.add(remote_ip)
+                            else:
+                                status = "flagged"
+                                err_detail = fw_res.get("error") or "Firewall rule failed or unprivileged"
+                                block_reason = f"Tracker detected; firewall enforcement unavailable: {err_detail}"
+                else:
+                    status = "allowed"
+                    block_reason = "Clean Connection"
 
             # Assemble event
             event = {

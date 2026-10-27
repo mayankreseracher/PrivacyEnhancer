@@ -27,6 +27,36 @@ except ImportError:
 from .platform_helper import IS_WINDOWS, IS_LINUX, IS_MACOS, PlatformHelper
 
 class FirewallEnforcer:
+    # Known major multi-tenant shared CDN and cloud infrastructure subnets
+    # (Cloudflare, Akamai, Fastly, CloudFront, Google Frontends)
+    SHARED_CDN_NETWORKS = [
+        ipaddress.ip_network(net) for net in [
+            "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+            "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+            "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+            "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+            "151.101.0.0/16", "199.232.0.0/16", # Fastly
+            "23.0.0.0/12", "104.64.0.0/10", # Akamai
+            "13.32.0.0/15", "13.35.0.0/16", "13.224.0.0/14", # AWS CloudFront
+            "172.217.0.0/16", "142.250.0.0/15", # Google Frontends
+        ]
+    ]
+
+    @classmethod
+    def is_shared_infrastructure(cls, ip_address: str) -> bool:
+        """
+        Determines whether an IP address belongs to multi-tenant shared CDN or cloud infrastructure.
+        Global IP blocking on shared infrastructure causes collateral damage to innocent applications.
+        """
+        try:
+            ip_obj = ipaddress.ip_address((ip_address or "").strip())
+            for net in cls.SHARED_CDN_NETWORKS:
+                if ip_obj in net:
+                    return True
+        except Exception:
+            pass
+        return False
+
     def __init__(self):
         self.rule_prefix = "TrackerControl_"
         self.backend = self._detect_firewall_backend()
@@ -373,6 +403,84 @@ class FirewallEnforcer:
         logger.warning(f"No supported firewall backend found to block IP: {clean_ip}")
         return {"success": False, "backend": "none", "error": "No supported firewall backend found"}
 
+    def block_app_target(self, exe_path: str, app_name: str, remote_ip: str) -> Dict[str, Any]:
+        """
+        App-specific firewall blocking: Blocks outbound connections to a specific remote IP
+        ONLY for the specified application. Prevents unintended collateral blocking of
+        unrelated applications sharing the same destination IP or multi-tenant CDN.
+        """
+        clean_ip = (remote_ip or "").strip()
+        try:
+            ip_obj = ipaddress.ip_address(clean_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved:
+                return {"success": False, "backend": "none", "error": f"Cannot block private or local IP: {clean_ip}"}
+        except (ValueError, AttributeError):
+            return {"success": False, "backend": "none", "error": f"Invalid IP address format: {clean_ip}"}
+
+        sanitized_name = (app_name or os.path.basename(exe_path) or "App").replace(" ", "_").replace(".", "_")
+        rule_name = f"{self.rule_prefix}AppTarget_{sanitized_name}_{clean_ip.replace('.', '_').replace(':', '_')}"
+
+        if IS_WINDOWS:
+            if not self.is_elevated:
+                return {"success": False, "backend": "netsh", "rule_name": rule_name, "error": "Administrative privileges required to add Windows Firewall rule."}
+            self._run_cmd(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"])
+            cmd = [
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                f"name={rule_name}",
+                "dir=out",
+                "action=block",
+                f"remoteip={clean_ip}",
+                f"description=TrackerControl App Target Block: {sanitized_name}"
+            ]
+            if exe_path and os.path.isabs(exe_path):
+                cmd.append(f"program={exe_path}")
+            success, out = self._run_cmd(cmd)
+            return {"success": success, "backend": "netsh", "rule_name": rule_name, "output": out}
+
+        elif IS_LINUX:
+            if not self.is_elevated:
+                return {"success": False, "backend": "iptables", "rule_name": rule_name, "error": "Root privileges required to add iptables rule."}
+            proc_basename = os.path.basename(exe_path).split()[0] if exe_path else app_name
+            if proc_basename and shutil.which("iptables"):
+                self._run_cmd(["iptables", "-D", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-d", clean_ip, "-m", "comment", "--comment", rule_name, "-j", "DROP"])
+                cmd = ["iptables", "-A", "OUTPUT", "-m", "owner", "--cmd-owner", proc_basename, "-d", clean_ip, "-m", "comment", "--comment", rule_name, "-j", "DROP"]
+                success, out = self._run_cmd(cmd)
+                return {"success": success, "backend": "iptables", "rule_name": rule_name, "output": out}
+
+            uid = self._get_process_uid(exe_path, app_name)
+            if uid is not None and uid >= 500:
+                self._ensure_nftables_table_and_chain()
+                cmd = ["nft", "add", "rule", "inet", "trackercontrol", "output", "meta", "skuid", str(uid), "ip", "daddr", clean_ip, "drop"]
+                success, out = self._run_cmd(cmd)
+                return {"success": success, "backend": "nftables", "rule_name": rule_name, "output": out}
+
+            return {"success": False, "backend": "none", "error": f"Could not determine process owner for app-specific rule for '{app_name}'"}
+
+        elif IS_MACOS:
+            if not self.is_elevated:
+                return {"success": False, "backend": "pfctl", "rule_name": rule_name, "error": "Root privileges required for macOS PF rules."}
+            uid = self._get_process_uid(exe_path, app_name)
+            if uid is not None and uid >= 500:
+                self._ensure_pf_anchor()
+                pf_bin = self._get_pfctl_bin()
+                anchor_name = f"trackercontrol_app_{uid}_{clean_ip.replace('.', '_').replace(':', '_')}"
+                pf_rule = f"block drop out proto {{tcp, udp}} from any to {clean_ip} user {uid}\n"
+                try:
+                    p = subprocess.run(
+                        [pf_bin, "-a", anchor_name, "-f", "-"],
+                        input=pf_rule,
+                        text=True,
+                        capture_output=True,
+                        timeout=5
+                    )
+                    return {"success": p.returncode == 0, "backend": "pfctl_uid", "rule_name": rule_name}
+                except Exception as e:
+                    return {"success": False, "backend": "pfctl_uid", "error": str(e)}
+
+            return {"success": False, "backend": "none", "error": f"Could not determine UID for app-specific rule for '{app_name}'"}
+
+        return {"success": False, "backend": "none", "error": "Unsupported platform for app-specific rule"}
+
     def unblock_ip(self, ip_address: str) -> Dict[str, Any]:
         clean_ip = (ip_address or "").strip()
         try:
@@ -678,79 +786,186 @@ class FirewallEnforcer:
                     "error": "Root privileges required to install iptables kill switch rules."
                 }
 
+            # Check if IPv6 is present on Linux host
+            has_ipv6 = os.path.exists("/proc/net/if_inet6") or (shutil.which("ip6tables") is not None)
+            if has_ipv6 and not shutil.which("ip6tables"):
+                return {
+                    "success": False,
+                    "kill_switch": False,
+                    "error": "ip6tables is missing. IPv6 enforcement is mandatory on systems with IPv6 to prevent traffic leaks."
+                }
+
             chain_name = "TC_KILLSWITCH"
 
+            def rollback_linux():
+                self._run_cmd(["iptables", "-D", "OUTPUT", "-j", chain_name])
+                self._run_cmd(["iptables", "-F", chain_name])
+                self._run_cmd(["iptables", "-X", chain_name])
+                if shutil.which("ip6tables"):
+                    self._run_cmd(["ip6tables", "-D", "OUTPUT", "-j", chain_name])
+                    self._run_cmd(["ip6tables", "-F", chain_name])
+                    self._run_cmd(["ip6tables", "-X", chain_name])
+
             # Always clean up previous chain from OUTPUT
-            self._run_cmd(["iptables", "-D", "OUTPUT", "-j", chain_name])
-            self._run_cmd(["iptables", "-F", chain_name])
-            self._run_cmd(["iptables", "-X", chain_name])
-            if shutil.which("ip6tables"):
-                self._run_cmd(["ip6tables", "-D", "OUTPUT", "-j", chain_name])
-                self._run_cmd(["ip6tables", "-F", chain_name])
-                self._run_cmd(["ip6tables", "-X", chain_name])
+            rollback_linux()
 
             if active:
-                # Create dedicated default-deny kill switch chain
+                # 1. IPv4 Chain Setup
                 s_c, out_c = self._run_cmd(["iptables", "-N", chain_name])
                 if not s_c:
                     return {"success": False, "kill_switch": False, "error": f"Failed to create iptables chain: {out_c}"}
 
-                # Allow loopback
-                self._run_cmd(["iptables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"])
-                # Allow established/related connections
-                self._run_cmd(["iptables", "-A", chain_name, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
-                # Allow DHCP lease negotiation
-                self._run_cmd(["iptables", "-A", chain_name, "-p", "udp", "--sport", "68", "--dport", "67", "-j", "ACCEPT"])
-                # Allow WireGuard and OpenVPN tunnel interfaces
-                self._run_cmd(["iptables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"])
-                self._run_cmd(["iptables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"])
-
-                # Allow connections to explicitly permitted VPN endpoints
+                v4_rules = [
+                    ["iptables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"],
+                    ["iptables", "-A", chain_name, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+                    ["iptables", "-A", chain_name, "-p", "udp", "--sport", "68", "--dport", "67", "-j", "ACCEPT"],
+                    ["iptables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"],
+                    ["iptables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"],
+                ]
                 if allowed_endpoints:
                     for ep in allowed_endpoints:
                         try:
                             if ":" in ep:
                                 host, port = ep.split(":", 1)
-                                self._run_cmd(["iptables", "-A", chain_name, "-d", host, "-p", "udp", "--dport", port, "-j", "ACCEPT"])
+                                v4_rules.append(["iptables", "-A", chain_name, "-d", host, "-p", "udp", "--dport", port, "-j", "ACCEPT"])
                             else:
-                                self._run_cmd(["iptables", "-A", chain_name, "-d", ep, "-j", "ACCEPT"])
+                                v4_rules.append(["iptables", "-A", chain_name, "-d", ep, "-j", "ACCEPT"])
                         except Exception:
                             pass
+                v4_rules.append(["iptables", "-A", chain_name, "-j", "DROP"])
 
-                # Strict DEFAULT-DENY: drop all remaining clearnet packets
-                self._run_cmd(["iptables", "-A", chain_name, "-j", "DROP"])
+                for r in v4_rules:
+                    s_r, out_r = self._run_cmd(r)
+                    if not s_r:
+                        rollback_linux()
+                        return {"success": False, "kill_switch": False, "error": f"Failed to add IPv4 rule {r}: {out_r}"}
 
-                # Insert into top of OUTPUT chain
                 s_ins, out_ins = self._run_cmd(["iptables", "-I", "OUTPUT", "1", "-j", chain_name])
                 if not s_ins:
-                    return {"success": False, "kill_switch": False, "error": f"Failed to attach kill switch: {out_ins}"}
+                    rollback_linux()
+                    return {"success": False, "kill_switch": False, "error": f"Failed to attach IPv4 kill switch: {out_ins}"}
 
-                # Also block IPv6 leaks if ip6tables is available
+                # 2. Mandatory IPv6 Chain Setup
                 if shutil.which("ip6tables"):
-                    self._run_cmd(["ip6tables", "-N", chain_name])
-                    self._run_cmd(["ip6tables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"])
-                    self._run_cmd(["ip6tables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"])
-                    self._run_cmd(["ip6tables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"])
-                    self._run_cmd(["ip6tables", "-A", chain_name, "-j", "DROP"])
-                    self._run_cmd(["ip6tables", "-I", "OUTPUT", "1", "-j", chain_name])
+                    s6_c, out6_c = self._run_cmd(["ip6tables", "-N", chain_name])
+                    if not s6_c:
+                        rollback_linux()
+                        return {"success": False, "kill_switch": False, "error": f"Failed to create ip6tables chain: {out6_c}"}
+
+                    v6_rules = [
+                        ["ip6tables", "-A", chain_name, "-o", "lo", "-j", "ACCEPT"],
+                        ["ip6tables", "-A", chain_name, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+                        ["ip6tables", "-A", chain_name, "-p", "udp", "--sport", "546", "--dport", "547", "-j", "ACCEPT"],
+                        ["ip6tables", "-A", chain_name, "-o", "wg+", "-j", "ACCEPT"],
+                        ["ip6tables", "-A", chain_name, "-o", "tun+", "-j", "ACCEPT"],
+                        ["ip6tables", "-A", chain_name, "-j", "DROP"],
+                    ]
+                    for r in v6_rules:
+                        s6_r, out6_r = self._run_cmd(r)
+                        if not s6_r:
+                            rollback_linux()
+                            return {"success": False, "kill_switch": False, "error": f"Failed to add IPv6 rule {r}: {out6_r}"}
+
+                    s6_ins, out6_ins = self._run_cmd(["ip6tables", "-I", "OUTPUT", "1", "-j", chain_name])
+                    if not s6_ins:
+                        rollback_linux()
+                        return {"success": False, "kill_switch": False, "error": f"Failed to attach IPv6 kill switch: {out6_ins}"}
 
                 return {
                     "success": True,
                     "kill_switch": True,
                     "policy": "DEFAULT_DENY",
-                    "output": "Linux iptables default-deny kill switch active. All clearnet dropped."
+                    "output": "Linux iptables & ip6tables default-deny kill switch active. All IPv4/IPv6 clearnet dropped."
                 }
             else:
                 return {"success": True, "kill_switch": False, "output": "Kill switch disarmed"}
 
         elif IS_MACOS:
-            if not shutil.which("pfctl") or (hasattr(os, "geteuid") and os.geteuid() != 0):
+            pf_bin = self._get_pfctl_bin()
+            if not shutil.which("pfctl") and not os.path.exists("/sbin/pfctl"):
                 return {
                     "success": False,
                     "kill_switch": False,
-                    "error": "Root privileges and pfctl required to enforce kill switch on macOS."
+                    "error": "pfctl is required to enforce kill switch on macOS."
                 }
-            return {"success": True, "kill_switch": active}
+            if hasattr(os, "geteuid") and os.geteuid() != 0:
+                return {
+                    "success": False,
+                    "kill_switch": False,
+                    "error": "Root privileges required to install macOS PF kill switch rules."
+                }
+
+            anchor_name = "trackercontrol_killswitch"
+
+            if active:
+                # 1. Enable PF if not already active
+                self._run_cmd([pf_bin, "-e"])
+
+                # 2. Build PF rule definitions
+                pf_rules = [
+                    "# TrackerControl macOS PF Kill Switch",
+                    "pass out quick on lo0 all",
+                    "pass out quick on utun+ all",
+                    "pass out quick proto udp from any port 68 to any port 67",
+                ]
+
+                if allowed_endpoints:
+                    for ep in allowed_endpoints:
+                        try:
+                            if ":" in ep:
+                                host, port = ep.split(":", 1)
+                                pf_rules.append(f"pass out quick proto udp to {host} port {port}")
+                                pf_rules.append(f"pass out quick proto tcp to {host} port {port}")
+                            else:
+                                pf_rules.append(f"pass out quick to {ep}")
+                        except Exception:
+                            pass
+
+                # Strict default-deny: drop all remaining outbound traffic
+                pf_rules.append("block drop out quick all\n")
+                pf_conf = "\n".join(pf_rules)
+
+                try:
+                    p = subprocess.run(
+                        [pf_bin, "-a", anchor_name, "-f", "-"],
+                        input=pf_conf,
+                        text=True,
+                        capture_output=True,
+                        timeout=5
+                    )
+                    if p.returncode != 0:
+                        err_msg = (p.stderr or p.stdout or "Unknown pfctl error").strip()
+                        return {
+                            "success": False,
+                            "kill_switch": False,
+                            "error": f"Failed to load macOS PF kill switch rules: {err_msg}"
+                        }
+                    return {
+                        "success": True,
+                        "kill_switch": True,
+                        "policy": "DEFAULT_DENY",
+                        "output": "macOS PF default-deny kill switch active. All clearnet blocked outside VPN tunnel."
+                    }
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "kill_switch": False,
+                        "error": f"Exception executing pfctl: {e}"
+                    }
+            else:
+                # Disarm: Flush anchor rules
+                s, out = self._run_cmd([pf_bin, "-a", anchor_name, "-F", "all"])
+                if not s:
+                    return {
+                        "success": False,
+                        "kill_switch": False,
+                        "error": f"Failed to flush macOS PF kill switch anchor: {out}"
+                    }
+                return {
+                    "success": True,
+                    "kill_switch": False,
+                    "output": "macOS PF kill switch disarmed. Clearnet traffic permitted."
+                }
 
         return {
             "success": False,
@@ -899,5 +1114,6 @@ class FirewallEnforcer:
             pf_bin = self._get_pfctl_bin()
             self._run_cmd([pf_bin, "-a", "trackercontrol", "-F", "all"])
             self._run_cmd([pf_bin, "-a", "trackercontrol", "-t", "tc_blocked_ips", "-T", "flush"])
+            self._run_cmd([pf_bin, "-a", "trackercontrol_killswitch", "-F", "all"])
             return {"success": True, "output": "Flushed macOS PF TrackerControl anchors"}
         return {"success": True, "output": "No rules to flush"}

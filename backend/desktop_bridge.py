@@ -66,7 +66,12 @@ class DesktopBridge:
         query_string = parsed.query.encode('ascii')
 
         raw_body = b""
-        headers = [(b"host", b"trackercontrol.local")]
+        headers = [
+            (b"host", b"trackercontrol.local"),
+            (b"x-requested-with", b"TrackerControl"),
+            (b"origin", b"null"),
+            (b"sec-fetch-site", b"same-origin")
+        ]
         if body is not None:
             if isinstance(body, (dict, list)):
                 raw_body = json.dumps(body).encode('utf-8')

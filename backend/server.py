@@ -43,21 +43,15 @@ class APISecurityManager:
         if not host:
             return True
         clean = host.strip().lower()
-        if clean in ("127.0.0.1", "::1", "localhost", "testclient", "desktop.internal", "trackercontrol.local"):
+        if clean in ("127.0.0.1", "::1", "localhost", "testclient", "testserver", "desktop.internal", "trackercontrol.local"):
             return True
         if clean.startswith("127.") or clean == "::ffff:127.0.0.1":
             return True
         return False
 
-    def validate_request(self, client_host: str, auth_header: Optional[str] = None, query_token: Optional[str] = None) -> bool:
-        # Loopback is allowed by default unless strict auth is enforced
-        if self.is_loopback(client_host) and not self.require_auth_all:
-            return True
-
+    def validate_token(self, auth_header: Optional[str] = None, query_token: Optional[str] = None) -> bool:
         if not self._auth_token:
-            # If no auth token is established, deny all non-loopback network access
             return False
-
         token_to_check = None
         if auth_header:
             if auth_header.lower().startswith("bearer "):
@@ -66,14 +60,28 @@ class APISecurityManager:
                 token_to_check = auth_header.strip()
         elif query_token:
             token_to_check = query_token.strip()
-
         if not token_to_check:
             return False
-
-        # Constant-time comparison to prevent timing side-channel attacks
         return secrets.compare_digest(token_to_check, self._auth_token)
 
+    def validate_request(self, client_host: str, auth_header: Optional[str] = None, query_token: Optional[str] = None) -> bool:
+        # Loopback is allowed by default unless strict auth is enforced
+        if self.is_loopback(client_host) and not self.require_auth_all:
+            return True
+
+        return self.validate_token(auth_header, query_token)
+
 api_security = APISecurityManager()
+
+ALLOWED_HOST_NAMES = {
+    "127.0.0.1", "localhost", "[::1]", "::1", "testclient", "testserver",
+    "desktop.internal", "trackercontrol.local"
+}
+
+ALLOWED_ORIGIN_HOSTS = {
+    "127.0.0.1", "localhost", "[::1]", "::1", "testclient", "testserver",
+    "desktop.internal", "trackercontrol.local"
+}
 
 
 FRONTEND_DIR = PlatformHelper.get_resource_path("frontend")
@@ -99,10 +107,78 @@ app.add_middleware(
 @app.middleware("http")
 async def enforce_api_authentication(request: Request, call_next):
     """
-    Enforces authentication for all administrative API endpoints.
-    Permits public static frontend assets and /health, but mandates strong authentication
-    for any network/LAN caller attempting to invoke administrative endpoints.
+    Enforces DNS-rebinding protection, CSRF defense, and administrative API authentication:
+    1. Host Header Validation: Rejects requests with foreign Host headers (DNS-rebinding protection).
+    2. CSRF Defense: For state-changing methods (POST, PUT, DELETE, PATCH), enforces Origin/Referer
+       validation, blocks cross-site fetch, and requires custom X-Requested-With header or token.
+    3. Authentication: Mandates bearer/API key authentication for any non-loopback network caller.
     """
+    # 1. Host header validation (DNS-rebinding protection)
+    raw_host = request.headers.get("host", "").strip()
+    if raw_host:
+        host_name = raw_host.split(":")[0].strip().lower()
+        if host_name not in ALLOWED_HOST_NAMES and not (api_security.remote_access_allowed and host_name):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Forbidden: Untrusted Host header (DNS rebinding protection).",
+                    "host": raw_host
+                }
+            )
+
+    # 2. CSRF and Cross-Origin protection for state-changing requests
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        sec_fetch_site = (request.headers.get("sec-fetch-site") or "").lower().strip()
+        if sec_fetch_site == "cross-site":
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Forbidden: Cross-site request rejected (CSRF protection)."}
+            )
+
+        origin = request.headers.get("origin")
+        if origin and origin != "null":
+            from urllib.parse import urlparse
+            try:
+                parsed_origin = urlparse(origin)
+                orig_host = (parsed_origin.hostname or "").lower()
+                if orig_host not in ALLOWED_ORIGIN_HOSTS and not (api_security.remote_access_allowed and orig_host):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": f"Forbidden: Untrusted Origin '{origin}' (CSRF protection)."}
+                    )
+            except Exception:
+                return JSONResponse(status_code=403, content={"error": "Forbidden: Malformed Origin header."})
+        elif not origin:
+            referer = request.headers.get("referer")
+            if referer:
+                from urllib.parse import urlparse
+                try:
+                    parsed_ref = urlparse(referer)
+                    ref_host = (parsed_ref.hostname or "").lower()
+                    if ref_host not in ALLOWED_ORIGIN_HOSTS and not (api_security.remote_access_allowed and ref_host):
+                        return JSONResponse(
+                            status_code=403,
+                            content={"error": f"Forbidden: Untrusted Referer '{referer}' (CSRF protection)."}
+                        )
+                except Exception:
+                    pass
+
+        # Custom header requirement (standard HTML forms and images cannot forge custom headers cross-origin)
+        auth_header = request.headers.get("Authorization") or request.headers.get("X-API-Key")
+        query_token = request.query_params.get("token")
+        has_auth_token = api_security.validate_token(auth_header, query_token)
+
+        if not has_auth_token:
+            req_with = (request.headers.get("x-requested-with") or "").lower().strip()
+            if req_with not in ("trackercontrol", "trackercontrol-pc"):
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "Forbidden: Missing required X-Requested-With header or authorization token (CSRF protection).",
+                        "hint": "Set X-Requested-With: TrackerControl or provide an API token."
+                    }
+                )
+
     path = request.url.path
     if path in ("/", "/styles.css", "/app.js", "/health", "/favicon.ico") or path.startswith("/static/"):
         return await call_next(request)
@@ -137,6 +213,28 @@ async def shutdown_event():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Host header check (DNS rebinding defense)
+    raw_host = websocket.headers.get("host", "").strip()
+    if raw_host:
+        host_name = raw_host.split(":")[0].strip().lower()
+        if host_name not in ALLOWED_HOST_NAMES and not (api_security.remote_access_allowed and host_name):
+            await websocket.close(code=4403, reason="Forbidden: Untrusted Host header")
+            return
+
+    # Origin check (Cross-site WebSocket Hijacking defense)
+    origin = websocket.headers.get("origin")
+    if origin and origin != "null":
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(origin)
+            orig_host = (parsed.hostname or "").lower()
+            if orig_host not in ALLOWED_ORIGIN_HOSTS and not (api_security.remote_access_allowed and orig_host):
+                await websocket.close(code=4403, reason="Forbidden: Untrusted Origin")
+                return
+        except Exception:
+            await websocket.close(code=4403, reason="Forbidden: Malformed Origin")
+            return
+
     client_host = websocket.client.host if websocket.client else "127.0.0.1"
     auth_header = websocket.headers.get("Authorization") or websocket.headers.get("X-API-Key")
     query_token = websocket.query_params.get("token")
@@ -850,6 +948,21 @@ async def request_system_elevation():
 async def get_system_vault_status():
     """Returns the active encryption-at-rest provider and status of CredentialVault."""
     return vault.get_status()
+
+@app.get("/api/dns/status")
+async def get_dns_encryption_status():
+    """Returns upstream DNS transport protocol, encryption status, and privacy disclosures."""
+    if hasattr(engine, "dns_proxy") and engine.dns_proxy:
+        return engine.dns_proxy.get_dns_status()
+    return {"configured": False, "protocol": "doh", "is_encrypted": True, "error": "DNS Proxy unavailable"}
+
+@app.post("/api/dns/protocol")
+async def set_dns_encryption_protocol(payload: Dict[str, Any]):
+    """Configures upstream DNS transport ('doh', 'dot', or 'udp')."""
+    protocol = payload.get("protocol", "doh")
+    if hasattr(engine, "dns_proxy") and engine.dns_proxy:
+        return engine.dns_proxy.set_upstream_protocol(protocol)
+    return {"success": False, "error": "DNS Proxy unavailable"}
 
 @app.post("/api/dns/restore-emergency")
 async def restore_dns_emergency():
