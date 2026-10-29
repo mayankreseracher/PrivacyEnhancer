@@ -1,0 +1,64 @@
+# Privacy Policy
+
+**Effective date:** [Oct 30,2026]  
+**Application:** TrackerControl PC (also referred to as PrivacyEnhancer)  
+**Publisher:** Tiger
+**Contact:** tiger.sasquatch115@passinbox.com
+
+This Privacy Policy explains how TrackerControl PC handles information when you use the application. It applies to the application and its related update and support channels, unless a separate notice is provided.
+
+## 1. Information the application may process
+
+TrackerControl PC provides local network monitoring and system controls. Depending on the features you enable and the permissions you grant, it may process information on your device such as:
+
+- Running process names, process IDs, executable paths, and application details.
+- Network connections, destination addresses, ports, DNS requests, and traffic or connection statistics.
+- Tracker-blocking events, firewall rules, alerts, and application preferences.
+- VPN, proxy, or Tor configuration information that you enter or choose to use.
+
+This information may be necessary for the application to show network activity, attribute connections to applications, apply blocking rules, or manage selected tunnels. **Confirm in the released build whether this information is stored, where it is stored, and for how long.** If it is stored locally, describe the relevant files, retention, and deletion steps here: [details].
+
+## 2. Information sent outside your device
+
+The application may communicate with third-party services when you use certain features. Depending on the feature and your configuration, these may include:
+
+- GitHub, to check for application releases or download updates.
+- VPN providers, including Proton VPN, when you choose to connect to their services.
+- Tor or Orbot services, when you configure or use them.
+- DNS resolvers and destination websites or services involved in your network activity.
+
+Those services may receive connection information such as your IP address or the information required to provide the requested service. Their own privacy policies and terms govern their handling of that information. The application’s developer does not control those services.
+
+[Confirm whether the application sends diagnostics, crash reports, analytics, or any other telemetry. If it does, identify the data, recipient, purpose, and opt-out method. If it does not, state that only after verifying the released build.]
+
+## 3. Local processing and storage
+
+The application is designed to perform its monitoring and control functions on your computer. System-wide DNS interception, firewall changes, process attribution, and other features may require administrator or root privileges. The application may keep settings, logs, or databases on your device; exact locations and retention depend on the operating system and version: [document locations and retention].
+
+You can remove locally stored application data by [provide verified uninstall or deletion instructions]. Uninstalling the application may not remove operating-system firewall, DNS, VPN, or service settings created by the application. Review and restore those settings separately where necessary.
+
+## 4. Information you provide
+
+If you contact the developer or submit an issue, you may provide your email address, message, and any files or diagnostic information you choose to include. Please avoid sending passwords, VPN credentials, private keys, or other sensitive information. Support messages are used to respond to and investigate your request and are retained for [retention period or criteria].
+
+## 5. Credentials and network settings
+
+If you enter VPN credentials, tokens, private keys, or similar secrets, they may be processed by the application to configure the relevant service. Before release, document whether these are stored, how they are protected, and how users can remove them: [verified storage and deletion details]. Do not claim encryption or secure storage unless the implementation has been verified.
+
+## 6. Children
+
+The application is not designed specifically for children. [State the applicable minimum age and any child-related data practices after reviewing the laws that apply to the publisher.]
+
+## 7. Security
+
+Reasonable measures should be used to protect application data, but no software or storage method can be guaranteed completely secure. You are responsible for securing your device, protecting credentials, and reviewing the permissions and network settings you enable.
+
+## 8. Changes to this policy
+
+This policy may be updated as the application’s features or data practices change. The current version will be published at [policy URL or repository location], with its effective date shown above.
+
+## 9. Contact
+
+Questions about this policy or the application’s data practices can be sent to:
+
+**Email:** tiger.sasquatch115@passinbox.com  
